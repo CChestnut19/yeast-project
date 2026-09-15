@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+.testdeps/
+.runtime/
+Output/
+tmp/
+.pytest_cache/
+new_foldchange_max_values*.csv
+new_max_L_values*.csv
+new_output*.csv
+new_f1f2*.csv
+pareto_foldchange3_points_fast.csv
