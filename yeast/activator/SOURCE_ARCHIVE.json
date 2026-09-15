@@ -1,0 +1,22 @@
+{
+  "archive_name": "05_scripts(1).zip",
+  "sha256": "907e3e588a4dec52d1af2865185fd337b435adc1e613a0ba5107cc3e7aff0950",
+  "sources": [
+    {
+      "path": "05_scripts/00_dump_source_sheet.mjs",
+      "sha256": "f78c1af80a8aba70ce5b3021d90320f1b70d7c94df25f7be5d6156f92bcc8ced",
+      "replacement": "yeast/activator/source.py; python -m yeast.activator dump"
+    },
+    {
+      "path": "05_scripts/01_recalculate.py",
+      "sha256": "53671907c26d1a2c43dd65638f211b58e8be251775bd208f077437cd944ff9da",
+      "replacement": "yeast/activator/{panels,parameters,model,measurements,aggregation,recalculate}.py"
+    },
+    {
+      "path": "05_scripts/02_validate_log10_r2.py",
+      "sha256": "8493fb46c3f1af62a6cbdecc89dfed1334d4e6538cdb99068fc7637eb816edfe",
+      "replacement": "yeast/activator/validate.py"
+    }
+  ],
+  "excluded": "__pycache__ and compiled .pyc files are generated runtime caches"
+}

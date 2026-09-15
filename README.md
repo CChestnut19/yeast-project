@@ -1,11 +1,13 @@
 # yeast-project
 
-酵母传感器分析 notebooks，以及独立的哺乳动物 CIC 拟合模块。
+酵母 activator 数值重算与校验、历史分析 notebooks，以及独立的哺乳动物 CIC 拟合模块。
 
 ## 目录
 
 - 根目录 10 个 `.ipynb`：保留各实验和模型变体。许多历史单元格仍使用 `E:/Desktop/...` 数据路径，运行前需按自己的实验目录修改；原始数据没有随仓库提供。
-- `yeast_analysis.py`：`new_foldchange.ipynb` 共用的响应、折叠变化和二维 Pareto 筛选。酵母 `Imax` 表示振幅，总输出上限为 `I0 + Imax`。
+- `yeast/activator/`：来自 `05_scripts(1).zip` 的 27 面板 activator 工作流，按数据读取、面板、参数、模型、聚合、重算和校验分模块；入口为 `python -m yeast.activator`。
+- `yeast/analysis.py`：历史 notebook 共用的响应、折叠变化和二维 Pareto 筛选。根目录 `yeast_analysis.py` 保留兼容导入。
+- `yeast/binding.py`：酵母模型共用的质量守恒计算。历史 notebook 的 `Imax` 表示振幅；activator 的 `Tmax=35.85` 表示总输出上限。
 - `mammalian/Scripts/`：7 个原始脚本经检查后的版本，以及 `run_pipeline.py`。该模型的总输出上限固定为 13.61 RPU，与酵母模型分开维护。
 - `tests/`：合成数据回归测试、notebook 语法检查、命令行入口检查。合成测试结果不代表真实实验拟合已复现。
 - `tools/clean_notebooks.py`：清理 notebook 的执行输出和未使用导入。
@@ -23,10 +25,12 @@ PyTorch 是可选依赖；使用 Adam 后端或历史 PyTorch notebook 单元格
 
 ## 使用
 
-酵母分析：从仓库根目录打开 notebooks；`new_foldchange.ipynb` 导入同目录的 `yeast_analysis.py`。各单元格保留不同的参数集，运行完整 notebook 时按原顺序执行。
+酵母 activator 的输入格式、运行命令和分析规则见 [yeast/activator/README.md](yeast/activator/README.md)。只运行该工作流时安装 `yeast/requirements.txt` 即可，不需要 Node、Excel 应用或专用 artifact-tool 运行库。
+
+历史酵母分析：从仓库根目录打开 notebooks；`new_foldchange.ipynb` 的原导入方式继续可用。各单元格保留不同的参数集与模型变体，不能因为名称相近就替换成 activator 的结果。
 
 哺乳动物流程见 [mammalian/README.md](mammalian/README.md)。当前仓库尚未包含实验 CSV、原始映射、初始向量及出版绘图资源；预检查会明确报告缺少的输入。
 
 生成结果写入明确指定的输出目录；请优先使用 G 盘目录。不要把生成的 notebook 图像、缓存和拟合结果重复提交到源码仓库。
 
-本次修改和验证范围见 [CODE_REVIEW.md](CODE_REVIEW.md)。
+最初整理记录见 [CODE_REVIEW.md](CODE_REVIEW.md)，本次 activator 整理与原版对照记录见 [yeast/activator/REVIEW.md](yeast/activator/REVIEW.md)。

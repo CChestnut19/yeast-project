@@ -1,0 +1,42 @@
+{
+  "description": "Synthetic fixture reference from the original 05_scripts/01_recalculate.py, not experimental observations",
+  "original_script_sha256": "53671907c26d1a2c43dd65638f211b58e8be251775bd208f077437cd944ff9da",
+  "row_counts": {
+    "01_concentration_unit_conversion.csv": 27,
+    "01_conditional_means_for_R2.csv": 2148,
+    "01_plot_input_30pct_audit.csv": 228,
+    "01_raw_measurements_long.csv": 9024,
+    "01_recalculated_parameters.csv": 189,
+    "01_recalculated_source_data.csv": 1620,
+    "01_recalculated_statistics.csv": 216
+  },
+  "log10_r2": {
+    "SN9-P1-A": 0.9999617994922891,
+    "SN9-P1-B": 0.999995764129493,
+    "SN9-P1-C": 0.999995764129493,
+    "SN9-P1-D": 0.999995147048989,
+    "SN9-P2-A": 0.999995764129493,
+    "SN9-P2-B": 0.999995764129493,
+    "SN9-P2-C": 0.999995764129493,
+    "SN9-P2-D": 0.999995764129493,
+    "SN9-P2-E": 0.999995764129493,
+    "SN9-P3-A": 0.999995764129493,
+    "SN9-P3-B": 0.999962405987154,
+    "SN9-P3-C": 0.999962405987154,
+    "SN9-P3-D": 0.999962405987154,
+    "SN9-P3-E": 0.999995764129493,
+    "SN9-P4-A": 0.9999264767637196,
+    "SN9-P4-B": 0.999962405987154,
+    "SN9-P4-C": 0.9999264767637196,
+    "SN9-P4-D": 0.999962405987154,
+    "SN9-P5-A": 0.9999264767637196,
+    "SN9-P5-B": 0.999962405987154,
+    "SN9-P5-C": 0.999962405987154,
+    "SN9-P5-D": 0.999995764129493,
+    "SN9-P5-E": 0.999962405987154,
+    "SN9-P6-A": 0.9998156854905208,
+    "SN9-P6-B": 0.9999264767637196,
+    "SN9-P6-C": 0.9999264767637196,
+    "SN9-P6-D": 0.9998518219429073
+  }
+}
