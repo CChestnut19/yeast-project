@@ -1,16 +1,20 @@
-# Yeast code
+# Yeast models
 
-| 位置 | 用途 |
+Run commands from the repository root. Start with the [reproduction guide](../submission/REPRODUCIBILITY.md) for a pinned environment and the combined Note 10/11 demo.
+
+| Module | Scope |
 | --- | --- |
-| `activator/` | 27 个 Supplementary Note 9 activator 面板的固定参数重算、批次聚合、R² 校验与可选历史对比 |
-| `repressor/` | Note 10 的 4 个 repressor、1,141 条测量重算、raw/log10 指标及 35 mm 图 |
-| `combinatorial/` | Note 11 的组合模型、216 个均值、12 面板两页图和 log10 指标 |
-| `analysis.py` | 原有 notebook 的响应、fold-change 和 Pareto 工具 |
-| `binding.py` | 共用的二聚体质量守恒计算 |
-| `metrics.py` / `reporting.py` | Note 10/11 共用的严格统计、结果导出和重新计算校验 |
+| [activator](activator/README.md) | Fixed-parameter reconstruction, batch aggregation and R² validation for 27 Supplementary Note 9 panels; original inputs still required |
+| [repressor](repressor/README.md) | Supplementary Note 10: four sensors, 1,141 supplied measurements, raw/log10 metrics and a 35 mm plot |
+| [combinatorial](combinatorial/README.md) | Supplementary Note 11: 216 supplied means, 12 panels, a two-page figure and log10 metrics |
+| `analysis.py` | Response, fold-change and Pareto utilities used by the historical notebooks |
+| `binding.py` | Shared dimer mass-balance calculation |
+| `metrics.py` / `reporting.py` | Strict statistics, result export and recomputation checks shared by Notes 10 and 11 |
 
-两套输出约定分别保留：activator 使用总上限 `Tmax=35.85`，历史 notebook 使用振幅 `Imax`，其总上限为 `I0+Imax`。共用的是底层质量守恒计算。
+## Model conventions
 
-Note 10 的 repressor 使用各传感器自己的总输出上限及 `1-(1-p)^2`；Note 11 的组合模型使用 `Tmax=35.85` 及 `p_activator*p^2`。两者沿用各自附件参数及精度。说明见 [repressor](repressor/README.md) 和 [combinatorial](combinatorial/README.md)。
+The activator workflow uses a total ceiling `Tmax=35.85`. Historical notebooks use an amplitude `Imax`, with total ceiling `I0+Imax`. Only the underlying mass-balance calculation is shared.
 
-运行方式见 [activator/README.md](activator/README.md)。根目录 `yeast_analysis.py` 是兼容入口，不含重复模型实现。历史 notebooks 中还存在不同实验、不同物种和不同参数集；这些内容不等同于当前 27 面板 activator 流程。
+Note 10 uses sensor-specific total ceilings and the weight `1-(1-p_unbound)^2`. Note 11 uses `Tmax=35.85` and `p_activator*p_unbound^2`. Each retains its supplied parameter values and precision; they are distinct model conventions.
+
+The root `yeast_analysis.py` is a compatibility import without a duplicate model implementation. Historical notebooks contain different experiments, species and parameter sets, and are not interchangeable with the 27-panel activator workflow. Their mapping to final manuscript figures remains to be confirmed.

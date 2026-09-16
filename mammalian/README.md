@@ -1,29 +1,27 @@
 # Mammalian CIC model (n = 7)
 
-独立保存哺乳动物工作流。默认拟合对象为 25 个 CIC CSV；`402.csv` 为排除对照。LBD 共享 `Kd0/Kb/Kd1`，DBD 共享 `KA/T0_variant`，`KA_lexAec87=9.15`，`Tmax=13.61`。
+This independent workflow fits 25 CIC sensors. `402.csv` is an excluded control. LBDs share `Kd0/Kb/Kd1`, DBDs share `KA/T0_variant`, `KA_lexAec87=9.15`, and the total output ceiling is `Tmax=13.61`.
 
-## 所需原始资料
+**Original experimental inputs are not included.** See [Input/README.md](Input/README.md). The source README must contain the real six-column sensor mapping, and the two initial parameter vectors must use that mapping's order. Synthetic tests do not establish experimental reproduction.
 
-见 [Input/README.md](Input/README.md)。本文件不提供虚构的映射表；请用 `--readme` 指向配套资料中含真实六列表格的 README。两个 `.npy` 初始向量的顺序必须与该映射一致。
+## Run
 
-## 运行
-
-从仓库根目录执行；下例路径请替换成真实输入位置。
+Install the [pinned submission environment](../submission/REPRODUCIBILITY.md). Run from the repository root, replacing `path/to/source` with the original package location:
 
 ```bash
-python mammalian/Scripts/run_pipeline.py --stage check --readme G:/mammalian_source/README.md --input-dir G:/mammalian_source/Input
-python mammalian/Scripts/run_pipeline.py --stage fit --readme G:/mammalian_source/README.md --input-dir G:/mammalian_source/Input --output-dir G:/codex_outputs/yeast_project/mammalian
-python mammalian/Scripts/run_pipeline.py --stage figures --readme G:/mammalian_source/README.md --input-dir G:/mammalian_source/Input --output-dir G:/codex_outputs/yeast_project/mammalian
+python mammalian/Scripts/run_pipeline.py --stage check --readme path/to/source/README.md --input-dir path/to/source/Input
+python mammalian/Scripts/run_pipeline.py --stage fit --readme path/to/source/README.md --input-dir path/to/source/Input --output-dir Output/mammalian
+python mammalian/Scripts/run_pipeline.py --stage figures --readme path/to/source/README.md --input-dir path/to/source/Input --output-dir Output/mammalian
 ```
 
-`fit` 执行带每传感器 log10 R²≥0.5 约束的拟合与数值复核；`figures` 使用已保存参数生成 25 传感器曲线、校正 Figure 13、实验-预测图和 Word 参数表。`all` 顺序执行两阶段。`check` 检查输入数据、映射、向量形状和绘图文件是否存在；字体可用性和布局在绘图阶段检查。
+`fit` performs constrained fitting with log10 R² >= 0.5 for every sensor and numerical validation. `figures` uses saved parameters for all 25 curves, corrected Figure 13, experiment-versus-prediction plots and Word parameter tables. `all` runs both stages. `check` checks the inputs, mapping, vector shapes and figure resources; font availability and layout are checked during plotting.
 
-结果目录为 `--output-dir/scipy_sensor_logR2_floor_0p5/`。优化没有找到可行解时仍保留诊断，但以退出码 2 终止，不继续生成正式图表。初始向量不会从其他目录静默读取。
+Results are written under `--output-dir/scipy_sensor_logR2_floor_0p5/`. If optimization finds no feasible solution, diagnostics remain available and the command exits with code 2 before figure generation. Initial vectors are never silently taken from another directory.
 
-单独运行 `model_core.py --backend scipy|torch|both` 可使用原有混合 raw/log10 macro-R² 目标；它与约束拟合目标不同，输出目录也不同。PyTorch 需要额外依赖。
+Running `model_core.py --backend scipy|torch|both` directly uses the original mixed raw/log10 macro-R² objective, which differs from the constrained fitting objective and writes to a different directory. The optional PyTorch backend needs `requirements-torch.txt` and is outside the pinned submission demo.
 
-## 验证范围
+## Validation scope
 
-`validate_results.py --numerical-only` 从原始 CSV 与参数向量重算预测、模型中间量和逐传感器 R²，并检查参数表与汇总一致性。默认完整验证还要求论文数据的固定计数（953 条观测、549.csv 的零浓度约定）、出版 PDF 和样式资料。
+`validate_results.py --numerical-only` recalculates predictions, model intermediates and per-sensor R² from the experimental CSVs and parameter vector, and checks the parameter tables and summary. Full validation also requires the manuscript-specific counts (953 observations and the zero-dose convention for `549.csv`), publication PDFs and style resources.
 
-参考字体 Helvetica 需要本机安装合法可用且支持 PDF 嵌入的常规体和粗体。仓库不随附字体，也不会静默替换出版字体。
+Publication plotting requires locally available, legally usable and embeddable Helvetica regular and bold fonts. Fonts are not distributed here, and publication fonts are not silently substituted.
