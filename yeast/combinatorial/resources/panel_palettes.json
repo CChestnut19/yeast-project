@@ -1,0 +1,566 @@
+{
+  "A1": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.383,
+        0.086,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        157,
+        233,
+        255
+      ],
+      "hex": "#9DE9FF"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.613,
+        0.164,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        99,
+        213,
+        255
+      ],
+      "hex": "#63D5FF"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.828,
+        0.43,
+        0.063,
+        0.004
+      ],
+      "converted_rgb": [
+        43,
+        144,
+        238
+      ],
+      "hex": "#2B90EE"
+    }
+  ],
+  "A2": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.383,
+        0.086,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        157,
+        233,
+        255
+      ],
+      "hex": "#9DE9FF"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.613,
+        0.164,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        99,
+        213,
+        255
+      ],
+      "hex": "#63D5FF"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.828,
+        0.43,
+        0.063,
+        0.004
+      ],
+      "converted_rgb": [
+        43,
+        144,
+        238
+      ],
+      "hex": "#2B90EE"
+    }
+  ],
+  "A3": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.145,
+        0.227,
+        0.199,
+        0.008
+      ],
+      "converted_rgb": [
+        216,
+        195,
+        202
+      ],
+      "hex": "#D8C3CA"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.227,
+        0.434,
+        0.383,
+        0.098
+      ],
+      "converted_rgb": [
+        172,
+        119,
+        132
+      ],
+      "hex": "#AC7784"
+    },
+    {
+      "series_value_uM": 100.0,
+      "pdf_color": [
+        0.309,
+        0.617,
+        0.563,
+        0.313
+      ],
+      "converted_rgb": [
+        96,
+        18,
+        32
+      ],
+      "hex": "#601220"
+    }
+  ],
+  "A4": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.145,
+        0.227,
+        0.199,
+        0.008
+      ],
+      "converted_rgb": [
+        216,
+        195,
+        202
+      ],
+      "hex": "#D8C3CA"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.227,
+        0.434,
+        0.383,
+        0.098
+      ],
+      "converted_rgb": [
+        172,
+        119,
+        132
+      ],
+      "hex": "#AC7784"
+    },
+    {
+      "series_value_uM": 100.0,
+      "pdf_color": [
+        0.309,
+        0.617,
+        0.563,
+        0.313
+      ],
+      "converted_rgb": [
+        96,
+        18,
+        32
+      ],
+      "hex": "#601220"
+    }
+  ],
+  "B1": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.383,
+        0.086,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        157,
+        233,
+        255
+      ],
+      "hex": "#9DE9FF"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.613,
+        0.164,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        99,
+        213,
+        255
+      ],
+      "hex": "#63D5FF"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.828,
+        0.43,
+        0.063,
+        0.004
+      ],
+      "converted_rgb": [
+        43,
+        144,
+        238
+      ],
+      "hex": "#2B90EE"
+    }
+  ],
+  "B2": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.383,
+        0.086,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        157,
+        233,
+        255
+      ],
+      "hex": "#9DE9FF"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.613,
+        0.164,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        99,
+        213,
+        255
+      ],
+      "hex": "#63D5FF"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.828,
+        0.43,
+        0.063,
+        0.004
+      ],
+      "converted_rgb": [
+        43,
+        144,
+        238
+      ],
+      "hex": "#2B90EE"
+    }
+  ],
+  "B3": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.012,
+        0.164,
+        0.238,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        213,
+        194
+      ],
+      "hex": "#FCD5C2"
+    },
+    {
+      "series_value_uM": 0.1,
+      "pdf_color": [
+        0.012,
+        0.398,
+        0.594,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        154,
+        104
+      ],
+      "hex": "#FC9A68"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.0,
+        0.598,
+        0.91,
+        0.0
+      ],
+      "converted_rgb": [
+        255,
+        103,
+        23
+      ],
+      "hex": "#FF6717"
+    }
+  ],
+  "B4": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.012,
+        0.164,
+        0.238,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        213,
+        194
+      ],
+      "hex": "#FCD5C2"
+    },
+    {
+      "series_value_uM": 0.1,
+      "pdf_color": [
+        0.012,
+        0.398,
+        0.594,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        154,
+        104
+      ],
+      "hex": "#FC9A68"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.0,
+        0.598,
+        0.91,
+        0.0
+      ],
+      "converted_rgb": [
+        255,
+        103,
+        23
+      ],
+      "hex": "#FF6717"
+    }
+  ],
+  "C1": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.043,
+        0.18,
+        0.016,
+        0.0
+      ],
+      "converted_rgb": [
+        244,
+        209,
+        251
+      ],
+      "hex": "#F4D1FB"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.105,
+        0.426,
+        0.016,
+        0.0
+      ],
+      "converted_rgb": [
+        228,
+        146,
+        251
+      ],
+      "hex": "#E492FB"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.168,
+        0.629,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        212,
+        95,
+        255
+      ],
+      "hex": "#D45FFF"
+    }
+  ],
+  "C2": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.043,
+        0.18,
+        0.016,
+        0.0
+      ],
+      "converted_rgb": [
+        244,
+        209,
+        251
+      ],
+      "hex": "#F4D1FB"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.105,
+        0.426,
+        0.016,
+        0.0
+      ],
+      "converted_rgb": [
+        228,
+        146,
+        251
+      ],
+      "hex": "#E492FB"
+    },
+    {
+      "series_value_uM": 10.0,
+      "pdf_color": [
+        0.168,
+        0.629,
+        0.0,
+        0.0
+      ],
+      "converted_rgb": [
+        212,
+        95,
+        255
+      ],
+      "hex": "#D45FFF"
+    }
+  ],
+  "C3": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.012,
+        0.164,
+        0.238,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        213,
+        194
+      ],
+      "hex": "#FCD5C2"
+    },
+    {
+      "series_value_uM": 0.1,
+      "pdf_color": [
+        0.012,
+        0.398,
+        0.594,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        154,
+        104
+      ],
+      "hex": "#FC9A68"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.0,
+        0.598,
+        0.91,
+        0.0
+      ],
+      "converted_rgb": [
+        255,
+        103,
+        23
+      ],
+      "hex": "#FF6717"
+    }
+  ],
+  "C4": [
+    {
+      "series_value_uM": 0.0,
+      "pdf_color": [
+        0.012,
+        0.164,
+        0.238,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        213,
+        194
+      ],
+      "hex": "#FCD5C2"
+    },
+    {
+      "series_value_uM": 0.1,
+      "pdf_color": [
+        0.012,
+        0.398,
+        0.594,
+        0.0
+      ],
+      "converted_rgb": [
+        252,
+        154,
+        104
+      ],
+      "hex": "#FC9A68"
+    },
+    {
+      "series_value_uM": 1.0,
+      "pdf_color": [
+        0.0,
+        0.598,
+        0.91,
+        0.0
+      ],
+      "converted_rgb": [
+        255,
+        103,
+        23
+      ],
+      "hex": "#FF6717"
+    }
+  ]
+}

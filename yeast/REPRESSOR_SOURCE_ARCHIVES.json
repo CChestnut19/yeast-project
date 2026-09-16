@@ -1,0 +1,37 @@
+[
+  {
+    "archive": "repressor_model_scripts(1).zip",
+    "sha256": "77b30271a02246918af86e1f0a07ebc62d39466e4309679f5724546ee5e13ff2",
+    "files": {
+      "supplementary_note_10_model_scripts/calculate_log10_r2.py": "ee7931716485554efa4ac9740f91dd7022cdebcb7da7631f2ae7a474577533f7",
+      "supplementary_note_10_model_scripts/plot_experiment_vs_prediction.py": "afdd97ba2948cd1e2bbe2ad38fe23c7824eddc5bcd73866ecc66c18f068bf4f8",
+      "supplementary_note_10_model_scripts/README.md": "1544722f58b66454a88ab3f639cf30aea6135f79b2013443ca016a80deb4cc81",
+      "supplementary_note_10_model_scripts/repressor_model.py": "5f8b201f6a92ce963dbd9307e91d929ef2e4846218fa5828351421d97597cebc",
+      "supplementary_note_10_model_scripts/requirements.txt": "9eebce20a0961087e8eadc0a6324b3f487304863324d209ccceabc51aa1f55e5",
+      "supplementary_note_10_model_scripts/data/experiment_data.csv": "9a185611ae572647b77290ac3e665b9bd2b3b455fb224c08dec797f553d71914",
+      "supplementary_note_10_model_scripts/data/experiment_prediction.csv": "314c6542e4b566723f9f37b4ff0dd58c8fd664ce8e6a01033ddbe9b264989882",
+      "supplementary_note_10_model_scripts/output/pdf/experiment_vs_prediction_35mm.pdf": "95eb561a7ec347817eb3c9c14a2498558eb7be6e87ab708098669ee6b2b3058e",
+      "supplementary_note_10_model_scripts/output/png/experiment_vs_prediction_35mm_600dpi.png": "f68c3c2384f15a84eb0229b56be97069da768b11ab50ec370457f6e333bf9796",
+      "supplementary_note_10_model_scripts/output/svg/experiment_vs_prediction_35mm.svg": "0d9f611ee9f3489f70a9069f6efa274dde3be24b2227199954dc83cea536045c",
+      "supplementary_note_10_model_scripts/results/log10_r2.json": "b47f49b30910b6ca3c774cf880321aa6fe614fb722cbaf1cf6b22212a1b6a875"
+    }
+  },
+  {
+    "archive": "Supplementary_Note_11_plot(1).zip",
+    "sha256": "c5dbfc1eed28cc250cfa23ac5eac792a8020a7387ec719f100b08733abb42212",
+    "files": {
+      "Supplementary_Note_11_plot/data/Supplementary_Note_11_plot_data.csv": "2e7affb66a0b55e5979e9b2327324f09fff10d651a2da6fd08185c9579a9e95a",
+      "Supplementary_Note_11_plot/output/Supplementary_Note_11.pdf": "3a7923e4c0719cd86c4798f575df692c4aa79e167e8fbedba0d8ca29527523e6",
+      "Supplementary_Note_11_plot/output/Supplementary_Note_11.png": "6bfd87a8075ac3071f946981cc23a0c73f04016914f2c291cd003b31db194692",
+      "Supplementary_Note_11_plot/output/Supplementary_Note_11_page_1.png": "ae78302e6e63de9459fa83d1a807047b23e408852d0aa2ab00960c6e6e76b01d",
+      "Supplementary_Note_11_plot/output/Supplementary_Note_11_page_2.png": "2af7c41422afdbcd6f2824e0991e6815b351a7e9ec20ba923ac1d176d8f17737",
+      "Supplementary_Note_11_plot/plot_supplementary_note_11.py": "bd11f58731342336a506f562328e3416043902ee2cdc413ada542a0645e35313",
+      "Supplementary_Note_11_plot/README.md": "30583d214d3941e7a8b8037784d9c8d9de31783357b390d2d3294c9ec194fd32",
+      "Supplementary_Note_11_plot/requirements.txt": "07067fe3298a55517f4ac0f387c0187d49b329cd867c00cd69b6ba78fc364588",
+      "Supplementary_Note_11_plot/resources/axis_template.json": "e5699eb7f6fb590afa93f46e5c8b310f4d58fdd63ef33e1dcce8e1e64400ffbf",
+      "Supplementary_Note_11_plot/resources/panel_geometry.json": "fce2d819477867a2bc1e50e36716698559ed0dcf0284843492fa1e881840a53d",
+      "Supplementary_Note_11_plot/resources/panel_palettes.json": "b7d489a433acb8fdeb70bba31e28a8f5314d05ee0189ba3e9c9cbd88977c447f",
+      "Supplementary_Note_11_plot/resources/Supplementary_Note_11_layout.pdf": "a91c9ed8baafec706d7fe973e6774cd56e6227ee88d3ac8c1552a484f763cb5e"
+    }
+  }
+]

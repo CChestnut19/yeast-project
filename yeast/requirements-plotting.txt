@@ -1,0 +1,5 @@
+-r requirements.txt
+matplotlib>=3.6.2,<4
+Pillow>=9,<12
+pypdf>=6.0,<7
+reportlab>=4.4,<5
