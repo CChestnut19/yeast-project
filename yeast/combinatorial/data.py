@@ -4,12 +4,11 @@ from yeast.reporting import number, read_records
 from .model import PANELS
 
 DEFAULT_DATA = Path(__file__).resolve().parent / 'data/Supplementary_Note_11_plot_data.csv'
-DEFAULT_RESOURCES = Path(__file__).resolve().parent / 'resources'
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / 'Output/combinatorial'
 COLUMNS = ('panel', 'condition', 'x_value_uM', 'series_value_uM', 'mean_RPU', 'sample_SD_RPU')
 
 
-def read_plot_data(path):
+def read_data(path):
     rows, keys = [], set()
     for index, source in enumerate(read_records(path, COLUMNS), 2):
         panel = source['panel']

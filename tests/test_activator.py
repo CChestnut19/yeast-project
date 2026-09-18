@@ -22,7 +22,6 @@ from yeast.activator.source import (parse_cell, read_sheet, load_source_package,
                                    write_csv, write_json, sha256, excel_col, cell_coordinates)
 from yeast.activator.validate import validate, as_bool, log10_r2, source_change_audit
 from yeast import analysis
-import yeast_analysis
 
 
 class ActivatorUnitTests(unittest.TestCase):
@@ -45,8 +44,7 @@ class ActivatorUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cell_coordinates("A0")
 
-    def test_legacy_imports_and_total_output_window(self):
-        self.assertIs(yeast_analysis.response_pair, analysis.response_pair)
+    def test_shared_response_and_total_output_window(self):
         tf, dose, ka, kd0, kb, kd1, t0, ceiling = 2, 10, 2, .001, .1, .5, .016, 35.85
         legacy = analysis.response_pair(tf, ka, kd0, kb, kd1, ceiling-t0, t0, dose)[0]
         self.assertAlmostEqual(float(model.model_s32_s47(tf,dose,ka,kd0,kb,kd1,t0)), float(legacy))

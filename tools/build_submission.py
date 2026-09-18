@@ -32,9 +32,9 @@ def selected_files(root):
         relative = PurePosixPath(name)
         if relative.is_absolute() or '..' in relative.parts or str(relative) != name:
             raise ValueError(f'Unsafe package path: {name!r}')
-        if (name.endswith(('.ipynb', '.pyc', '.pyo')) or name == 'tests/test_legacy_notebooks.py'
+        if (name.endswith(('.ipynb', '.pyc', '.pyo', '.pdf', '.png', '.svg', '.docx'))
                 or any(part.lower() in {'output', '__pycache__', 'tmp'} or part.startswith('.') for part in relative.parts)):
-            raise ValueError(f'Development or generated file cannot enter submission: {name}')
+            raise ValueError(f'Non-algorithm or generated file cannot enter submission: {name}')
         path = root / name
         if root not in path.resolve().parents or any(parent.is_symlink() for parent in [path, *path.parents] if parent != root):
             raise ValueError(f'Linked or outside package path: {name}')

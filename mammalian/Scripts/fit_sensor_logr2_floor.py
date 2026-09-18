@@ -236,18 +236,7 @@ def write_outputs(
             "maximum_reweight_rounds": MAX_REWEIGHT_ROUNDS,
         },
     )
-    # Reuse the audited table and dense-curve writers from the common model.
-    # The publication package keeps only the accepted formal plots. The
-    # generic diagnostic fits.pdf from the common writer is intentionally
-    # suppressed; all numerical tables and dense mechanistic curves are still
-    # written unchanged.
-    core.write_result(
-        result,
-        data,
-        layout,
-        output_root,
-        write_diagnostic_plot=False,
-    )
+    core.write_result(result, data, layout, output_root)
     backend_dir = output_root / BACKEND
 
     metrics.to_csv(backend_dir / "constraint_metrics.csv", index=False)
@@ -271,16 +260,6 @@ def write_outputs(
     parameter_lbd = pd.read_csv(backend_dir / "parameters_lbd.csv")
     parameter_lbd["weak_shape_prior_applied"] = False
     parameter_lbd.to_csv(backend_dir / "parameters_lbd.csv", index=False)
-    dense = pd.read_csv(backend_dir / "curves_dense.csv")
-    dense["curve_shape_source"] = dense["curve_shape_source"].replace(
-        {"weak_prior_endpoint_only": "endpoint_only_no_shape_prior"}
-    )
-    dense.to_csv(backend_dir / "curves_dense.csv", index=False)
-    shape_metrics = pd.read_csv(backend_dir / "curve_shape_metrics.csv")
-    shape_metrics["curve_shape_source"] = shape_metrics[
-        "curve_shape_source"
-    ].replace({"weak_prior_endpoint_only": "endpoint_only_no_shape_prior"})
-    shape_metrics.to_csv(backend_dir / "curve_shape_metrics.csv", index=False)
 
     objective = {
         "global_unweighted_MSE_log10": float(selected["global_MSE_log10"]),

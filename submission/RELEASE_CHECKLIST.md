@@ -1,35 +1,25 @@
-# Manuscript code release checklist
+# Algorithm release checklist
 
-This repository is a **DRAFT** prepared for code review. The checklist follows [Nature Portfolio code-publication guidance](https://www.nature.com/documents/GuidelinesCodePublication.pdf); the exact target journal's requirements still need confirmation.
+Current scope: algorithm-only draft `0.2.0-draft.1`.
 
-## Implemented in this preparation
+## Implemented
 
-- [x] Separate yeast activator, repressor and combinatorial workflows, with an independent mammalian module.
-- [x] Shared numerical functions, documented model distinctions and regression references.
-- [x] English installation, input, output and figure-mapping documentation.
-- [x] Exact dependency lock and machine-readable tested environment.
-- [x] Runnable supplied-data demo with metric checks, timings and missing-data disclosure.
-- [x] GitHub Actions configuration for Windows/Linux tests and PDF reproduction.
-- [x] Optional draft archive with explicit inventory, source revision and SHA-256 checksums.
+- Shared algorithms and distinct model conventions are documented.
+- Root notebooks are consolidated into numerical modules with a cell-by-cell migration inventory.
+- Drawing code, PDF layouts, palettes, document generation and their dependencies are removed.
+- Numerical workflows include tests, reference metrics, input checks and provenance.
+- A fixed numerical environment, reproducible demo, GitHub CI and an optional hash-verified archive are provided.
 
-Completed run results, including skipped tests and platform limits, are recorded in [VALIDATION.md](VALIDATION.md). A configured workflow is not itself evidence of a passing remote run.
+Completed execution evidence is in [VALIDATION.md](VALIDATION.md). Configuration alone is not evidence that a remote run passed.
 
-## Author inputs still required
+## Pending author decisions
 
-- [ ] Confirm target journal, manuscript title, software title and contributors.
-- [ ] Confirm every manuscript figure/panel and analysis in [FIGURE_MAP.md](FIGURE_MAP.md).
-- [ ] Provide missing experimental inputs or verified access arrangements in [DATA_REQUIREMENTS.md](DATA_REQUIREMENTS.md).
-- [ ] Confirm the license and applicable terms for data and figure resources; see [LICENSE_STATUS.md](LICENSE_STATUS.md).
-- [ ] Complete software citation metadata and the manuscript Code/Data availability statements.
-- [ ] Run and inspect every claimed manuscript result with the final inputs; report discrepancies without changing reference values to hide failures.
+- [ ] Confirm manuscript/software title, contributors and exact journal.
+- [ ] Confirm [analysis mapping](ANALYSIS_MAP.md), including which historical algorithms support manuscript claims.
+- [ ] Supply [missing experimental inputs](DATA_REQUIREMENTS.md) or verified access arrangements.
+- [ ] Approve the software license and data terms.
+- [ ] Complete citation and Code/Data availability statements.
+- [ ] Verify every claimed numerical result against final inputs.
+- [ ] Freeze an approved commit/version and deposit an immutable archive; record its actual persistent identifier if issued.
 
-## Freeze the approved version
-
-- [ ] Review the GitHub branch and merge the approved code into the intended publication branch.
-- [ ] Verify the exact clean commit with tests, the demo and the final figure/input mapping.
-- [ ] Choose a final version and tag; this draft-only builder does not promote a draft to a final release.
-- [ ] Deposit that immutable version in the chosen archive and record its actual persistent identifier/DOI when issued.
-- [ ] Cite the version-specific artifact and full source commit in the manuscript.
-- [ ] Verify archive contents/checksums and include accurate installation/runtime instructions.
-
-No final release, DOI, license or manuscript acceptance is implied by this preparation.
+No final license, DOI or complete-manuscript validation is asserted. Rendering is outside this repository version's scope.

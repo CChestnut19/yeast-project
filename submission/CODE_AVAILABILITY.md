@@ -1,19 +1,5 @@
-# Code availability wording — DRAFT
+# Code availability — draft wording
 
-Author approval is required. No final DOI, published release, approved license or complete-manuscript reproduction is asserted.
+> Numerical model, fitting and analysis code is maintained at https://github.com/CChestnut19/yeast-project. The algorithm-only draft includes dependency specifications, regression tests and a runnable demonstration using the supplied yeast Note 10/11 data. Figure rendering is outside this version's scope. Original activator, mammalian and some historical experimental inputs remain incomplete; these workflows have not been reproduced on their original datasets in this draft.
 
-## Current draft status
-
-> The repository is being prepared for submission as software version 0.1.0-draft.1. It includes source code, dependencies, tests, provenance and a runnable demonstration using the supplied yeast repressor and combinatorial datasets associated with source Supplementary Notes 10 and 11. Activator and mammalian analysis code is included, but required experimental inputs are missing and those real-data workflows have not been reproduced in this draft. The manuscript mapping, software license, final release location and persistent archive identifier remain pending author confirmation.
-
-This describes current preparation; it is not final publication wording.
-
-## Final statement template
-
-Fill only after verifying each fact:
-
-> The code used for [AUTHOR-CONFIRMED ANALYSES / FIGURES] is available as [APPROVED SOFTWARE TITLE], version [FINAL VERSION], at [VERSION-SPECIFIC RELEASE OR ARCHIVE URL] ([DOI OR OTHER PERSISTENT IDENTIFIER, IF ISSUED]). The archived version corresponds to Git commit [FULL COMMIT SHA] and includes [ACCURATE SOURCE, DATA, PARAMETERS, DEPENDENCIES AND DEMO DESCRIPTION]. Installation and tested environment details are provided in [DOCUMENT PATH OR ACCESSIBLE LINK]. The software is distributed under [APPROVED LICENSE]. [DESCRIBE ACTUAL DATA/RESOURCE TERMS, ACCESS RESTRICTIONS AND MATERIAL REPRODUCTION LIMITATIONS].
-
-Do not retain an unissued DOI placeholder in submitted text, substitute a moving branch tip for a version-specific reference, claim open-source licensing before approval, or say missing data are available on request without an actual approved arrangement. Coordinate this with the manuscript's separate Data availability statement.
-
-Preparation references: [Nature Portfolio code-publication guidelines](https://www.nature.com/documents/GuidelinesCodePublication.pdf) and [Nature Communications reporting standards](https://www.nature.com/ncomms/editorial-policies/reporting-standards). The target journal remains unspecified.
+Before manuscript submission, replace this preparation statement with author-approved wording identifying the exact version/commit, approved software title and license, final archive URL or issued DOI, and actual data-access arrangements. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).

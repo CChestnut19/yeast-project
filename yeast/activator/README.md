@@ -85,4 +85,4 @@ Numerical CSV filenames follow the original scripts. The manifest uses portable 
 | `recalculate.py` / `validate.py` | Reconstruction, numerical exports and independent validation |
 | `__main__.py` | Command-line entry point |
 
-See [REVIEW.md](REVIEW.md) for the comparison with the original scripts and the scope of testing.
+See [validation evidence](../../submission/VALIDATION.md) for the current test scope. All outputs are numerical tables; the original source-schema names are retained for traceability.

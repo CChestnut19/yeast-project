@@ -33,6 +33,7 @@ class SubmissionPackageTests(unittest.TestCase):
         }))
         (root / 'README.md').write_text('# Test source\n')
         (root / 'old.ipynb').write_text('not for release')
+        (root / 'figure.pdf').write_text('not for release')
         (root / 'secret.tmp').write_text('not for release')
         (root / 'submission/package_files.json').write_text(json.dumps({
             'files': ['README.md', 'submission/metadata.json', 'submission/package_files.json'],
@@ -66,7 +67,7 @@ class SubmissionPackageTests(unittest.TestCase):
         builder = load_builder()
         with tempfile.TemporaryDirectory() as directory:
             root = self.fixture(directory)
-            for files in [['../secret.txt'], ['/absolute'], ['C:/absolute'], ['missing.py'], ['README.md', 'README.md'], ['old.ipynb']]:
+            for files in [['../secret.txt'], ['/absolute'], ['C:/absolute'], ['missing.py'], ['README.md', 'README.md'], ['old.ipynb'], ['figure.pdf']]:
                 (root / 'submission/package_files.json').write_text(json.dumps({'files': files}))
                 with self.subTest(files=files), self.assertRaises((ValueError, FileNotFoundError)):
                     builder.build_archive(root, Path(directory) / 'out', {'revision':'a'*40, 'dirty':False, 'kind':'git'})
@@ -99,12 +100,14 @@ class SubmissionPackageTests(unittest.TestCase):
         builder = load_builder()
         files = builder.selected_files(ROOT)
         for required in ('yeast/repressor/data/experiment_data.csv',
-                         'yeast/combinatorial/resources/Supplementary_Note_11_layout.pdf',
+                         'yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv',
                          'mammalian/Scripts/model_core.py', 'tests/test_submission.py',
-                         'submission/requirements-lock.txt'):
+                         'yeast/analysis.py', 'submission/requirements-lock.txt'):
             self.assertIn(required, files)
         self.assertFalse(any(name.endswith('.ipynb') for name in files))
         self.assertNotIn('tests/test_legacy_notebooks.py', files)
+        self.assertFalse(any(name.endswith(('.pdf', '.png', '.svg', '.docx')) for name in files))
+        self.assertNotIn('yeast_analysis.py', files)
         self.assertFalse(any('Output/' in name or '.runtime/' in name or '__pycache__' in name for name in files))
 
     def test_demo_runs_both_supplied_datasets_from_any_working_directory(self):
@@ -112,7 +115,7 @@ class SubmissionPackageTests(unittest.TestCase):
         self.assertTrue(script.is_file(), 'Submission demo runner must exist')
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'results'
-            result = subprocess.run([sys.executable, str(script), '--no-plot', '--output-dir', str(target)],
+            result = subprocess.run([sys.executable, str(script), '--output-dir', str(target)],
                                     cwd=directory, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             report = json.loads((target / 'demo_report.json').read_text())

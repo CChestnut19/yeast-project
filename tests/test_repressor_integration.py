@@ -44,10 +44,10 @@ class RepressorIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(predicted_rpu('A1', 1, 0, 0), REFERENCE['note11']['predictions'][0], places=14)
 
     def test_note11_all_predictions_and_panel_r2_match_archive(self):
-        from yeast.combinatorial.data import read_plot_data
+        from yeast.combinatorial.data import read_data
         from yeast.combinatorial.model import predicted_rpu
         from yeast.combinatorial.pipeline import summarize
-        rows = read_plot_data(ROOT / 'yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv')
+        rows = read_data(ROOT / 'yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv')
         predicted = [predicted_rpu(r['panel'], r['condition'], r['x_value_uM'], r['series_value_uM']) for r in rows]
         np.testing.assert_allclose(predicted, REFERENCE['note11']['predictions'], rtol=1e-13, atol=1e-14)
         stats = summarize(rows)
@@ -91,7 +91,7 @@ class RepressorIntegrationTests(unittest.TestCase):
                 read_data(path)
 
     def test_note11_csv_rejects_wrong_condition_negative_sd_and_duplicates(self):
-        from yeast.combinatorial.data import read_plot_data
+        from yeast.combinatorial.data import read_data
         with (ROOT / 'yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv').open(encoding='utf-8-sig', newline='') as stream:
             source = list(csv.DictReader(stream))
         with tempfile.TemporaryDirectory() as directory:
@@ -101,10 +101,10 @@ class RepressorIntegrationTests(unittest.TestCase):
                 rows[0].update(change)
                 write_rows(path, rows)
                 with self.subTest(change=change), self.assertRaises(ValueError):
-                    read_plot_data(path)
+                    read_data(path)
             write_rows(path, source + [source[0]])
             with self.assertRaises(ValueError):
-                read_plot_data(path)
+                read_data(path)
 
     def test_both_clis_help_check_and_numeric_validation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,7 +114,7 @@ class RepressorIntegrationTests(unittest.TestCase):
                     result = subprocess.run([sys.executable, '-m', 'yeast.' + package, *args], cwd=ROOT, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertFalse(target.exists())
-                result = subprocess.run([sys.executable, '-m', 'yeast.' + package, 'run', '--no-plot', '--output-dir', str(target)], cwd=ROOT, capture_output=True, text=True)
+                result = subprocess.run([sys.executable, '-m', 'yeast.' + package, 'run', '--output-dir', str(target)], cwd=ROOT, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 result = subprocess.run([sys.executable, '-O', '-m', 'yeast.' + package, 'validate', '--output-dir', str(target)], cwd=ROOT, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -127,81 +127,7 @@ class RepressorIntegrationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertEqual(json.loads((target / 'validation.json').read_text())['status'], 'FAIL')
 
-    def test_note11_resource_checks_and_pdf_dimensions(self):
-        from yeast.combinatorial.data import read_plot_data
-        from yeast.combinatorial.plotting import load_resources, build_pdf
-        from pypdf import PdfReader
-        resources = ROOT / 'yeast/combinatorial/resources'
-        rows = read_plot_data(ROOT / 'yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv')
-        geometry, axes, palettes = load_resources(resources, rows)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'plot.pdf'
-            build_pdf(rows, resources / 'Supplementary_Note_11_layout.pdf', path, geometry, axes, palettes)
-            pdf = PdfReader(path)
-            self.assertEqual(len(pdf.pages), 2)
-            self.assertAlmostEqual(float(pdf.pages[0].mediabox.width), 595.276, places=2)
-            self.assertIn('R', pdf.pages[0].extract_text())
-            bad = Path(directory) / 'resources'
-            bad.mkdir()
-            for source in resources.glob('*.json'):
-                (bad / source.name).write_bytes(source.read_bytes())
-            colors = json.loads((bad / 'panel_palettes.json').read_text())
-            colors['A1'] = []
-            (bad / 'panel_palettes.json').write_text(json.dumps(colors))
-            with self.assertRaises(ValueError):
-                load_resources(bad, rows)
 
-    def test_note10_figure_dimensions_and_readable_raw_r2_label(self):
-        from yeast.repressor.pipeline import read_data, calculate_predictions, DEFAULT_DATA
-        from yeast.repressor.plotting import make_plot
-        from pypdf import PdfReader
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory)
-            make_plot(calculate_predictions(read_data(DEFAULT_DATA)), output)
-            pdf = PdfReader(output / 'pdf/experiment_vs_prediction_35mm.pdf')
-            self.assertEqual(len(pdf.pages), 1)
-            self.assertAlmostEqual(float(pdf.pages[0].mediabox.width), 35 / 25.4 * 72, places=4)
-            text = pdf.pages[0].extract_text()
-            self.assertIn('R\u00b2 (raw)', text)
-            self.assertIn('0.88', text)
-            self.assertIn('width="35mm" height="35mm"', (output / 'svg/experiment_vs_prediction_35mm.svg').read_text(encoding='utf-8'))
-
-    def test_note11_reversed_axes_and_incomplete_drawing_resources_are_rejected(self):
-        from yeast.combinatorial.data import read_plot_data, DEFAULT_DATA, DEFAULT_RESOURCES
-        from yeast.combinatorial.plotting import load_resources
-        rows = read_plot_data(DEFAULT_DATA)
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory)
-            for source in DEFAULT_RESOURCES.glob('*.json'):
-                (target / source.name).write_bytes(source.read_bytes())
-            original = json.loads((target / 'axis_template.json').read_text())
-            for field in ('x_major_tick_positions_pt', 'y_major_tick_top_positions_pt', 'black_axis_lines'):
-                axes = json.loads(json.dumps(original))
-                if field == 'black_axis_lines':
-                    del axes['A1'][field]
-                else:
-                    axes['A1'][field].reverse()
-                (target / 'axis_template.json').write_text(json.dumps(axes))
-                with self.subTest(field=field), self.assertRaises(ValueError):
-                    load_resources(target, rows)
-
-    def test_missing_plot_dependency_marks_failed_run(self):
-        with tempfile.TemporaryDirectory() as directory:
-            for package, dependency in [('repressor', 'matplotlib'), ('combinatorial', 'pypdf')]:
-                target = Path(directory) / package
-                # Block one optional library while running the real CLI and filesystem writes.
-                code = ("import builtins, runpy, sys\n"
-                        "original = builtins.__import__\n"
-                        "def blocked(name, *args, **kwargs):\n"
-                        f"    if name.split('.')[0] == {dependency!r}: raise ModuleNotFoundError('test missing plot dependency')\n"
-                        "    return original(name, *args, **kwargs)\n"
-                        "builtins.__import__ = blocked\n"
-                        f"sys.argv = ['yeast.{package}', 'run', '--output-dir', {str(target)!r}]\n"
-                        f"runpy.run_module('yeast.{package}', run_name='__main__')\n")
-                result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 2, result.stderr)
-                if target.exists():
-                    self.assertEqual(json.loads((target / 'validation.json').read_text())['status'], 'FAIL')
 
 
 if __name__ == '__main__':

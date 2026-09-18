@@ -24,7 +24,6 @@ import argparse
 import json
 import math
 import re
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -323,7 +322,7 @@ def predict_rpu_numpy(
 
 
 def cic_response_numpy(inducer, ctf_all, Kd0, Kb, Kd1, KA, T0_variant, tmax=TMAX):
-    """Shared n=7 response for fitting and plots (scalars or broadcastable arrays)."""
+    """Shared n=7 response for fitting and numerical analysis (scalars or broadcastable arrays)."""
     inducer = np.asarray(inducer, dtype=float)
     ctf_all = np.asarray(ctf_all, dtype=float)
     B = 1.0 + Kb * inducer
@@ -919,80 +918,11 @@ def build_dense_curve_outputs(
     return pd.concat(dense_rows, ignore_index=True), pd.DataFrame(metric_rows)
 
 
-def write_fit_plots(
-    output_path: Path,
-    data: FitData,
-    layout: ParameterLayout,
-    vector: np.ndarray,
-) -> None:
-    try:
-        import matplotlib.pyplot as plt
-        from matplotlib.backends.backend_pdf import PdfPages
-    except ModuleNotFoundError:
-        print("matplotlib is unavailable; skipping PDF fit plots", file=sys.stderr)
-        return
-
-    colors = ("#2474B5", "#E3A72F", "#2D9B56", "#A24BA5")
-    with PdfPages(output_path) as pdf:
-        for page_start in range(0, len(data.mappings), 6):
-            figure, axes = plt.subplots(2, 3, figsize=(16, 9), constrained_layout=True)
-            axes_flat = axes.ravel()
-            for local_index, mapping in enumerate(data.mappings[page_start : page_start + 6]):
-                csv_index = page_start + local_index
-                axis = axes_flat[local_index]
-                mask = data.csv_index == csv_index
-                frame = data.frame.loc[mask]
-                grid = make_curve_grid(frame)
-                min_positive = float(np.min(grid[grid > 0.0]))
-                for input_index, ctf_value in enumerate(sorted(frame["LBD"].unique())):
-                    group = frame[frame["LBD"] == ctf_value]
-                    axis.scatter(
-                        group["inducer"],
-                        group["RPU"],
-                        s=14,
-                        alpha=0.75,
-                        color=colors[input_index % len(colors)],
-                        label=f"C={ctf_value:.4g}",
-                    )
-                    synthetic = synthetic_curve_data(
-                        mapping, csv_index, float(ctf_value), grid, layout
-                    )
-                    curve, _ = predict_rpu_numpy(synthetic, layout, vector)
-                    axis.plot(grid, curve, color=colors[input_index % len(colors)], lw=1.6)
-                observed_positive_levels = frame.loc[
-                    frame["inducer"] > 0.0, "inducer"
-                ].nunique()
-                zero_plus_one_positive = (
-                    bool((frame["inducer"] == 0.0).any())
-                    and observed_positive_levels == 1
-                )
-                linthresh = (
-                    min_positive * 100.0
-                    if zero_plus_one_positive
-                    else min_positive / 2.0
-                )
-                axis.set_xscale("symlog", linthresh=linthresh)
-                axis.set_yscale("log")
-                axis.set_title(
-                    f"{mapping.csv_name} | {mapping.dbd}–{mapping.lbd}", fontsize=8.5
-                )
-                axis.set_xlabel("inducer (µM)")
-                axis.set_ylabel("RPU")
-                axis.grid(alpha=0.2)
-                axis.legend(fontsize=6)
-            for axis in axes_flat[len(data.mappings[page_start : page_start + 6]) :]:
-                axis.set_visible(False)
-            pdf.savefig(figure)
-            plt.close(figure)
-
-
 def write_result(
     result: FitResult,
     data: FitData,
     layout: ParameterLayout,
     output_root: Path,
-    *,
-    write_diagnostic_plot: bool = True,
 ) -> dict[str, object]:
     backend_dir = output_root / result.backend
     backend_dir.mkdir(parents=True, exist_ok=True)
@@ -1056,9 +986,6 @@ def write_result(
         "MAE_log10": float(per_csv_metrics["MAE_log10"].mean()),
     }
     objective_components = objective_components_numpy(data, layout, result.parameter_vector)
-    dense_curves, curve_shape_metrics = build_dense_curve_outputs(
-        data, layout, result.parameter_vector
-    )
 
     lbd_table.to_csv(backend_dir / "parameters_lbd.csv", index=False)
     dbd_table.to_csv(backend_dir / "parameters_dbd.csv", index=False)
@@ -1068,13 +995,7 @@ def write_result(
     pd.DataFrame([objective_components]).to_csv(
         backend_dir / "objective_components.csv", index=False
     )
-    dense_curves.to_csv(backend_dir / "curves_dense.csv", index=False)
-    curve_shape_metrics.to_csv(backend_dir / "curve_shape_metrics.csv", index=False)
     np.save(backend_dir / "parameter_vector.npy", result.parameter_vector)
-    if write_diagnostic_plot:
-        write_fit_plots(
-            backend_dir / "fits.pdf", data, layout, result.parameter_vector
-        )
 
     # Keep the JSON summary standards-compliant: the descriptive columns are
     # intentionally empty in the overall CSV row, but JSON must not contain NaN.

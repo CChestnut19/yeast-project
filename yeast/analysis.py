@@ -8,19 +8,29 @@ import numpy as np
 from .binding import active_dimer_pool
 
 
+def response(L, kd, k1, k2, k3, Imax, I0, I, kx1=0.0, kx2=0.0):
+    """Notebook response with an amplitude Imax (total ceiling I0 + Imax).
+
+    All inputs broadcast, including per-observation kd and inducer dose I.
+    This convention is deliberately separate from activator.model's total Tmax.
+    """
+    kd, k1, k2, k3, Imax, I0, I, kx1, kx2 = (
+        np.asarray(value, dtype=float)
+        for value in (kd, k1, k2, k3, Imax, I0, I, kx1, kx2))
+    if any(not np.isfinite(value).all() or np.any(value < 0)
+           for value in (kd, k1, k2, k3, Imax, I0, I, kx1, kx2)):
+        raise ValueError("Response parameters must be finite and non-negative")
+    effective = active_dimer_pool(
+        L, 1.0 + kx1 + k2 * I * (1.0 + kx2),
+        k1 * (1.0 + kx1**2) + k2**2 * k3 * I**2 * (1.0 + kx2**2))
+    z = kd * effective
+    return I0 + Imax * z / (1.0 + z)
+
+
 def response_pair(L, kd, k1, k2, k3, Imax, I0, I, kx1=0.0, kx2=0.0):
     """Return induced and basal responses without subtracting nearly equal roots."""
-    L = np.asarray(L, dtype=float)
-
-    def response(b, d):
-        effective = active_dimer_pool(L, b, d)
-        z = kd * effective
-        return I0 + Imax * z / (1.0 + z)
-
-    on = response(1.0 + kx1 + k2 * I * (1.0 + kx2),
-                  k1 * (1.0 + kx1**2) + k2**2 * k3 * I**2 * (1.0 + kx2**2))
-    off = response(1.0 + kx1, k1 * (1.0 + kx1**2))
-    return on, off
+    return (response(L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2),
+            response(L, kd, k1, k2, k3, Imax, I0, 0.0, kx1, kx2))
 
 
 def foldchange1(*args):
@@ -67,3 +77,42 @@ def fast_pareto_2d(points):
     mask = np.zeros(len(unique), dtype=bool)
     mask[order] = y > best_before
     return mask[inverse]
+
+
+def scan_designs(L, receptors, dbds, *, pareto=False):
+    """Scan caller-supplied receptor/DBD records; return numerical result records.
+
+    receptors need LBD_name, k1/k2/k3/Imax/I and optional kx1/kx2;
+    dbds need DBD_name, kd, I0. The DBD baseline overrides any receptor I0,
+    as in new_foldchange. Invalid logarithmic objectives are excluded explicitly.
+    pareto=False keeps the first grid maximum per pair; True returns the global
+    nondominated records, retaining tied points, in log10(fold) order.
+    """
+    L = np.asarray(L, dtype=float)
+    if L.ndim != 1 or not len(L) or not np.isfinite(L).all() or np.any(L < 0):
+        raise ValueError("L must be a nonempty finite non-negative vector")
+    dbds = list(dbds)
+    records = []
+    for receptor in receptors:
+        for dbd in dbds:
+            on, off = response_pair(
+                L, dbd['kd'], receptor['k1'], receptor['k2'], receptor['k3'],
+                receptor['Imax'], dbd['I0'], receptor['I'],
+                receptor.get('kx1', 0.0), receptor.get('kx2', 0.0))
+            valid = (on > off) & (off > 0) & np.isfinite(on) & np.isfinite(off)
+            indices = np.flatnonzero(valid)
+            if not len(indices):
+                continue
+            f1, f2 = np.log10(on[valid] / off[valid]), np.log10(on[valid] - off[valid])
+            selected = range(len(indices)) if pareto else [int(np.argmax(f1 + f2))]
+            for j in selected:
+                idx = indices[j]
+                records.append({'LBD_name': receptor['LBD_name'],
+                                'DBD_name': dbd['DBD_name'], 'L': float(L[idx]),
+                                'score': float(f1[j] + f2[j]), 'RPU': float(on[idx]),
+                                'log10_fold': float(f1[j]), 'log10_difference': float(f2[j])})
+    if pareto and records:
+        mask = fast_pareto_2d([[r['log10_fold'], r['log10_difference']] for r in records])
+        records = sorted((r for r, keep in zip(records, mask) if keep),
+                         key=lambda r: r['log10_fold'])
+    return records

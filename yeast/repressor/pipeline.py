@@ -40,14 +40,11 @@ def summarize(rows):
                     'pooled': metrics(rows, scale)} for scale in ('raw', 'log10')}
 
 
-def run(data_path=DEFAULT_DATA, output_dir=DEFAULT_OUTPUT, plot=True):
+def run(data_path=DEFAULT_DATA, output_dir=DEFAULT_OUTPUT):
     rows = calculate_predictions(read_data(data_path))
     metrics = summarize(rows)
     write_results(output_dir, rows, metrics, data_path, model_settings())
     result = validate_results(output_dir, rows, metrics, data_path, model_settings())
-    if plot:
-        from .plotting import make_plot
-        make_plot(rows, output_dir)
     return result
 
 

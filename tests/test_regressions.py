@@ -4,7 +4,6 @@ import contextlib
 from decimal import Decimal, localcontext
 import importlib.util
 import io
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +20,7 @@ sys.path[:0] = [str(ROOT), str(SCRIPTS)]
 import model_core as core
 import fit_sensor_logr2_floor as floor
 import validate_results as validation
-import yeast_analysis as yeast
+import yeast.analysis as yeast
 
 
 class ModelTests(unittest.TestCase):
@@ -105,6 +104,41 @@ class FitFixture(unittest.TestCase):
         checks = validation.validate_numerical_results(self.inputs, self.readme, self.result)
         self.assertGreater(len(checks), 75)
 
+    def test_default_validation_needs_only_numerical_inputs(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "validate_results.py"),
+             "--input-dir", str(self.inputs), "--readme", str(self.readme),
+             "--result-dir", str(self.result)],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PASS", result.stdout)
+        report = self.result / "numerical_validation_report.md"
+        self.assertIn("Saved predictions are reproduced", report.read_text(encoding="utf-8"))
+
+    def test_pipeline_check_fit_and_all_need_only_numerical_inputs(self):
+        for _, filename in floor.START_FILES:
+            np.save(self.inputs / filename, self.vector)
+        try:
+            for stage in ("check", "fit", "all"):
+                with self.subTest(stage=stage):
+                    destination = self.root / f"pipeline_{stage}"
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPTS / "run_pipeline.py"), "--stage", stage,
+                         "--input-dir", str(self.inputs), "--readme", str(self.readme),
+                         "--output-dir", str(destination), "--max-nfev", "1"],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if stage == "check":
+                        self.assertFalse(destination.exists())
+                    else:
+                        report = destination / floor.BACKEND / "numerical_validation_report.md"
+                        self.assertIn("PASS", report.read_text(encoding="utf-8"))
+        finally:
+            for _, filename in floor.START_FILES:
+                (self.inputs / filename).unlink()
+
     def test_tampered_saved_prediction_is_rejected(self):
         path = self.result / "predictions.csv"
         original = path.read_bytes()
@@ -183,7 +217,7 @@ class FitFixture(unittest.TestCase):
             core.fit_pytorch(self.data, self.layout, 0, .001, 0, 123)
 
 
-class NotebookTests(unittest.TestCase):
+class YeastModelTests(unittest.TestCase):
 
     def test_pareto_matches_quadratic_oracle_with_ties(self):
         rng = np.random.default_rng(20260915)
@@ -222,15 +256,6 @@ class ScriptTests(unittest.TestCase):
         for script in SCRIPTS.glob("*.py"):
             result = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, f"{script.name}: {result.stderr}")
-
-    def test_supplementary_model_uses_core_and_named_font_weights(self):
-        import plot_supplementary_figure13_corrected as supplementary
-        import plot_mammalian_experiment_vs_prediction as scatter
-        expected = core.cic_response_numpy([0, 1], 1, .001, 1, 1, 9.15, .02)[0]
-        np.testing.assert_array_equal(supplementary.model([0, 1], 1, .001, 1, 1, 9.15, .02, core.TMAX), expected)
-        self.assertEqual(scatter.font_weight("normal"), 400)
-        self.assertEqual(scatter.font_weight("bold"), 700)
-
 
 if __name__ == "__main__":
     unittest.main()

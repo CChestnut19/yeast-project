@@ -1,6 +1,6 @@
 {
   "package_title": "yeast-project reproduction code",
-  "version": "0.1.0-draft.1",
+  "version": "0.2.0-draft.1",
   "status": "DRAFT",
   "repository": "https://github.com/CChestnut19/yeast-project",
   "journal_family": "Nature Portfolio",
@@ -17,13 +17,15 @@
     "note10": "Supplied experimental table: 1141 replicate measurements",
     "note11": "Supplied processed experimental table: 216 means and sample SDs",
     "activator": "Experimental workbook and parameter TSV missing; synthetic tests only",
-    "mammalian": "Original observations and companion input package missing; synthetic tests only"
+    "mammalian": "Original observations and companion input package missing; synthetic tests only",
+    "historical_algorithms": "Consolidated from ten former root notebooks; literal/synthetic tests, original experimental CSVs missing"
   },
   "release_blockers": [
-    "Confirm exact journal and manuscript-to-code/figure mapping",
+    "Confirm exact journal and manuscript-to-analysis mapping",
     "Confirm manuscript title, software authors and citation metadata",
-    "Select license and confirm permissions for supplied data and figure resources",
+    "Select software license and confirm permissions for supplied data",
     "Supply missing experimental inputs and verify all claimed manuscript results",
     "Approve a final immutable release and archival DOI or other persistent identifier"
-  ]
+  ],
+  "scope": "Numerical algorithms only; rendering and document generation removed"
 }

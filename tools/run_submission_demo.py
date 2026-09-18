@@ -45,25 +45,20 @@ def check_outputs(output_dir):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--no-plot', action='store_true', help='Compute and verify numbers only')
-    parser.add_argument('--png', action='store_true', help='Also render Note 11 PNGs; requires Poppler pdftoppm')
     args = parser.parse_args(argv)
-    if args.png and args.no_plot:
-        parser.error('--png and --no-plot cannot be combined')
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     report_path = output / 'demo_report.json'
     report = {'status': 'RUNNING', 'python': platform.python_version(), 'platform': platform.platform(),
               'not_run': {'activator_experimental': 'Source workbook and parameter TSV not supplied',
-                          'mammalian_experimental': 'Experimental CSVs, mapping, vectors and publication assets not supplied'},
-              'commands': [], 'plot_mode': 'none' if args.no_plot else 'png' if args.png else 'pdf'}
+                          'mammalian_experimental': 'Experimental CSVs, mapping and initial vectors not supplied'},
+              'commands': [], 'scope': 'numerical_algorithms'}
     started = time.perf_counter()
     report_path.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
-    env = {**os.environ, 'MPLBACKEND': 'Agg', 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+    env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
     try:
         for package, name in [('repressor', 'note10'), ('combinatorial', 'note11')]:
-            options = ['--no-plot'] if args.no_plot else ['--pdf-only'] if package == 'combinatorial' and not args.png else []
-            command = [sys.executable, '-m', 'yeast.' + package, 'run', '--output-dir', str(output / name), *options]
+            command = [sys.executable, '-m', 'yeast.' + package, 'run', '--output-dir', str(output / name)]
             step_start = time.perf_counter()
             result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, encoding='utf-8')
             report['commands'].append({'command': command[1:], 'seconds': time.perf_counter() - step_start,
