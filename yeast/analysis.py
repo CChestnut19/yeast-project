@@ -1,11 +1,11 @@
-"""Shared yeast dose-response and Pareto helpers used by the notebooks.
+"""Shared canonical yeast dose-response and Pareto helpers.
 
 Here Imax is the response amplitude, so the upper limit is I0 + Imax.
 The separate mammalian model fixes its total upper limit to 13.61 RPU.
 """
 
 import numpy as np
-from .binding import active_dimer_pool
+from .binding import cic_dimer_pool
 
 
 def response(L, kd, k1, k2, k3, Imax, I0, I, kx1=0.0, kx2=0.0):
@@ -20,9 +20,7 @@ def response(L, kd, k1, k2, k3, Imax, I0, I, kx1=0.0, kx2=0.0):
     if any(not np.isfinite(value).all() or np.any(value < 0)
            for value in (kd, k1, k2, k3, Imax, I0, I, kx1, kx2)):
         raise ValueError("Response parameters must be finite and non-negative")
-    effective = active_dimer_pool(
-        L, 1.0 + kx1 + k2 * I * (1.0 + kx2),
-        k1 * (1.0 + kx1**2) + k2**2 * k3 * I**2 * (1.0 + kx2**2))
+    effective = cic_dimer_pool(L, I, k1, k2, k3, kx1, kx2)
     z = kd * effective
     return I0 + Imax * z / (1.0 + z)
 

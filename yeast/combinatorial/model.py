@@ -1,7 +1,7 @@
 """Note 11: activator occupancy times the probability BOTH operators are unbound."""
 from dataclasses import asdict, dataclass
 import numpy as np
-from yeast.binding import active_dimer_pool
+from yeast.binding import cic_dimer_pool
 
 TMAX_RPU = 35.85
 REPRESSOR_OPERATOR_COUNT = 2
@@ -41,7 +41,7 @@ def effective_pool(c_tf, inducer_uM, parameters):
     if not np.isfinite(dose).all() or np.any(dose < 0):
         raise ValueError('Inducer concentration must be finite and non-negative')
     kd0, kb, kd1 = (parameters[name] for name in ('Kd0', 'Kb', 'Kd1'))
-    return active_dimer_pool(c_tf, 1 + kb * dose, kd0 + (kb * dose)**2 * kd1)
+    return cic_dimer_pool(c_tf, dose, kd0, kb, kd1)
 
 
 def predicted_rpu(panel, condition, x_uM, series_uM):

@@ -5,7 +5,7 @@ import statistics
 from .panels import PANELS
 from .parameters import dbd_parameters_for_panel
 from .settings import TMAX_PRIMARY, TMAX_ALTERNATE, GLOBAL_T0_SENSITIVITY, PLOT_INPUT_RELATIVE_TOLERANCE
-from .model import model_s32_s47, model_s83_literal, unit_factor
+from .model import model_s32_s47, unit_factor
 
 
 def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
@@ -36,7 +36,6 @@ def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
         prediction = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY))
         prediction_tmax35 = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_ALTERNATE))
         prediction_global_t0 = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], GLOBAL_T0_SENSITIVITY, TMAX_PRIMARY))
-        prediction_literal = float(model_s83_literal(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY))
         condition_rows.append({
             "panel_id": panel_id,
             "page": panel.page,
@@ -68,7 +67,6 @@ def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "prediction_primary_rpu": prediction,
             "prediction_Tmax35_rpu": prediction_tmax35,
             "prediction_global_T0_0_035_rpu": prediction_global_t0,
-            "prediction_literal_S83_rpu": prediction_literal,
             "source_cells": ";".join(row["source_cell"] for row in group),
             "aggregation_rule": "within-batch arithmetic conditional mean of non-starred replicates at identical actual TF input and inducer; batches never pooled",
         })

@@ -1,15 +1,14 @@
 """Numerical models recovered from the root notebooks.
 
-These exploratory equations are distinct from the archived production models.
-Functions containing ``literal`` intentionally retain a source inconsistency;
-see docs/NOTEBOOK_MIGRATION.md before using them for scientific interpretation.
+Homodimer helpers reuse the canonical CIC model. Heterodimer and allosteric
+comparison models have distinct physical assumptions and are not CIC fit backends.
 No files are read and no work is performed on import.
 """
 import numpy as np
 from scipy.optimize import brentq
 
 from .analysis import response
-from .binding import active_dimer_pool
+from .binding import active_dimer_pool, cic_dimer_pool
 
 
 def dimer_response(total_tf, kd, dimer_term, amplitude=1.0, baseline=0.0,
@@ -23,12 +22,6 @@ def dimer_response(total_tf, kd, dimer_term, amplitude=1.0, baseline=0.0,
 def monomer_bound_pool(total_tf, association):
     """Hill-1 comparison in box cell 1: K*L/(1+K)."""
     return np.asarray(total_tf) * association / (1 + np.asarray(association))
-
-
-def quadratic_activation_literal(I, k2, k3):
-    """plot4 cell 1's printed scratch expression; I is now an explicit input."""
-    weight = (np.asarray(I)*k2)**2+k3
-    return weight/(1+weight)
 
 
 def heterodimer_free_pools(total_a, total_b, association):
@@ -64,16 +57,6 @@ def two_state_repression(tf, dna_binding, inducer, active_dissociation,
     inactive = (1 + np.asarray(inducer)/inactive_dissociation)**2
     fraction = active / (active + allosteric_weight*inactive)
     return 1 / (1 + fraction*np.asarray(tf)*dna_binding)
-
-
-def fixed_induced_root_fold_literal(L, kd, k1, k2, k3, I, amplitude,
-                                    baseline=0.001, root_tf=1.0):
-    """box cell 10: induced root uses root_tf=1, outside factor still uses L."""
-    induced_pool = np.asarray(L)/root_tf * active_dimer_pool(root_tf, 1, k2**2*k3*I**2)
-    z = np.asarray(kd)*induced_pool
-    on = baseline + amplitude*z/(1+z)
-    off = dimer_response(L, kd, k1, amplitude, baseline)
-    return on/off
 
 
 def simple_repression_partition_function(R, DBD, N_NS, delta_epsilon_pd,
@@ -140,24 +123,30 @@ def solve_operator_target(target, n, *, bracket=(1e-5, 100.0), **parameters):
 
 
 def hybrid_promoter(L_activator, L_repressor, I_activator, I_repressor,
-                    activator, repressor, amplitude_activator,
-                    amplitude_repressor, baseline):
-    """plot7 product gate; activator/repressor mappings hold kd,k1,k2,k3[,kx].
+                    activator, repressor, tmax, baseline=.01, operators=2):
+    """Note 11 gate: T0 + (Tmax-T0)*p_activator*p_unbound**operators.
 
-    The two amplitudes multiply; only one baseline is added. This is distinct
-    from combinatorial.model's archived promoter conventions.
+    Each receptor mapping holds kd,k1,k2,k3[,kx1,kx2]. Tmax is the total
+    ceiling, not the product of two historical notebook amplitudes.
     """
+    if (not np.isfinite(tmax) or not np.isfinite(baseline) or not 0 <= baseline < tmax
+            or isinstance(operators, bool) or operators < 1 or int(operators) != operators):
+        raise ValueError('Require 0 <= baseline < Tmax and a positive integer operator count')
     a = response(L_activator, I=I_activator, Imax=1., I0=0., **activator)
-    r = response(L_repressor, I=I_repressor, Imax=1., I0=0., **repressor)
-    return baseline + amplitude_activator*amplitude_repressor*a*(1-r)
+    r = dict(repressor)
+    kd = r.pop('kd')
+    if not np.isfinite(kd) or kd < 0:
+        raise ValueError('Repressor kd must be finite and non-negative')
+    pool = cic_dimer_pool(L_repressor, I_repressor, **r)
+    unbound = 1/(1+kd*pool)
+    return baseline + (tmax-baseline)*a*unbound**operators
 
 
-def mismatched_tf_crosstalk_literal(L, kd, k1, k21, k22, k31, k32, I,
-                                    amplitude=35.84931505, baseline=0.035485714):
-    """plot6 cell 12: second root uses kd as TF, but its outside factor uses L."""
+def crosstalk_ratio(L, kd, k1, k21, k22, k31, k32, I,
+                    amplitude=35.84931505, baseline=0.035485714):
+    """Second/first canonical response at the same TF and inducer concentrations."""
     first = response(L, kd, k1, k21, k31, amplitude, baseline, I)
-    pool = active_dimer_pool(kd, 1+k22*I, k1+k22**2*k32*I**2)
-    # original z=(L/2)*root_ratio*kd = L*pool for kd>0
-    z = np.asarray(L)*pool
-    second = baseline + amplitude*z/(1+z)
+    second = response(L, kd, k1, k22, k32, amplitude, baseline, I)
+    if np.any(first <= 0):
+        raise ValueError('Crosstalk ratio requires a positive reference response')
     return second/first

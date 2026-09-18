@@ -1,6 +1,6 @@
 # Reproducing the numerical algorithms
 
-Scope: algorithm-only draft `0.2.0-draft.1`. See [DATA_REQUIREMENTS.md](DATA_REQUIREMENTS.md) for experimental inputs not included.
+Scope: algorithm-only draft `0.2.1-draft.1`. See [DATA_REQUIREMENTS.md](DATA_REQUIREMENTS.md) for experimental inputs not included.
 
 ## Environment
 
@@ -50,6 +50,8 @@ No plot-related flags are accepted. `PASS` establishes computational agreement o
 
 [Individual yeast workflows](../yeast/README.md) and [mammalian fitting](../mammalian/README.md) document inputs and commands. The [root-notebook migration inventory](../docs/NOTEBOOK_MIGRATION.md) documents parameter estimation, optimization and other retained numerical APIs. Historical parameter sets are labeled by source cell; do not silently substitute them for the manuscript parameters.
 
+The [current formula and fitting specification](../docs/MODEL_AND_FITTING.md) defines the canonical model and log10 R² objective. Historical raw, mixed raw/log, epsilon and shape-prior fitting configurations are superseded. Refit original observations under the current objective before reporting updated fitted parameters.
+
 ## Optional archive
 
 From the intended clean Git commit:
@@ -58,6 +60,6 @@ From the intended clean Git commit:
 python tools/build_submission.py --output-dir ../submission-archives
 ```
 
-The builder creates `yeast-project-0.2.0-draft.1-DRAFT-<sha7>.zip`, an internal source/file-hash manifest and a neighboring `.zip.sha256`. It uses the explicit [file inventory](package_files.json), refuses existing outputs and rejects dirty checkouts unless `--allow-dirty` marks a development snapshot. Verify SHA-256 with `Get-FileHash -Algorithm SHA256` or `sha256sum`.
+The builder creates `yeast-project-0.2.1-draft.1-DRAFT-<sha7>.zip`, an internal source/file-hash manifest and a neighboring `.zip.sha256`. It uses the explicit [file inventory](package_files.json), refuses existing outputs and rejects dirty checkouts unless `--allow-dirty` marks a development snapshot. Verify SHA-256 with `Get-FileHash -Algorithm SHA256` or `sha256sum`.
 
 Extracted archives use the same install/test/demo commands as the repository. Repackaging verifies listed file hashes first. Original notebooks, figures and generated results are absent; all retained regression tests are included.

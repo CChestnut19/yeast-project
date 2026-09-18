@@ -4,6 +4,7 @@ from scipy.interpolate import interp1d
 from scipy.stats import linregress
 
 from .activator.model import r2_coefficient, pearson
+from .analysis import response_pair
 
 
 def _paired(x, y, *, minimum=2):
@@ -41,37 +42,32 @@ def saturated_fold_approximation(L, k1, kd):
 
 
 def quality_ratio(k1, k2, k3, I, *, kx1=None, kx2=None):
-    """ec50 cells 3–5: induced/basal coefficient ratio (not an EC50)."""
-    result = np.asarray(k3)*np.asarray(k2)**2*np.asarray(I)**2/np.asarray(k1)
+    """Inducer-dependent / basal dimerization contribution in the CIC pool.
+
+    This is a coefficient diagnostic, not output fold change or an EC50.
+    """
     if (kx1 is None) != (kx2 is None):
         raise ValueError("Supply both nuclear parameters or neither")
-    return result if kx1 is None else result*np.asarray(kx2)**2/np.asarray(kx1)**2
+    k1, k2, k3, I, x1, x2 = (np.asarray(v, float) for v in
+                             (k1,k2,k3,I,0. if kx1 is None else kx1,0. if kx2 is None else kx2))
+    if (np.any(k1 <= 0) or any(not np.isfinite(v).all() or np.any(v < 0)
+                             for v in (k1,k2,k3,I,x1,x2))):
+        raise ValueError('Require finite non-negative CIC parameters and k1 > 0')
+    return k3*k2**2*I**2*(1+x2**2)/(k1*(1+x1**2))
 
 
-def log_fold_range_literal(L, k1, k2, k3, kd, I, *, is_nuclear=False, kx1=0, kx2=0):
-    """ec50 cell 2, including the historical nuclear 'subtract 1' convention.
+def log_fold_range(L, k1, k2, k3, kd, I, *, kx1=0, kx2=0, Imax=1., I0=0.):
+    """Min/max log10(on/off) using exactly analysis.response_pair's equation.
 
-    Stable algebra for the same equation; retains the source's nan/inf sentinel
-    mapping and positive-only range policy. I is explicit because the cell used
-    a stale global I instead of its own sensor_I table.
+    Undefined folds raise an error; no sentinel values or observations are
+    inserted. A positive I0 defines the zero-TF fold as one.
     """
-    L = np.asarray(L, float)
-    basal_d, induced_d, b = k1, k2**2*k3*I**2, 1.0
-    if is_nuclear:
-        basal_d *= 1+kx1**2
-        induced_d *= 1+kx2**2
-        b = 1+kx1
-    roots = [np.sqrt(b*b+8*L*d) for d in (basal_d, induced_d)]
-    # (root-1)/(root+1), not (root-b)/(root+b).
-    y1, y2 = [(b*b-1+8*L*d)/(r+1)**2 for d, r in zip((basal_d, induced_d), roots)]
-    with np.errstate(divide='ignore', invalid='ignore'):
-        fold = ((1/y1)+L*kd/2)/((1/y2)+L*kd/2)
-    fold = np.nan_to_num(fold, nan=1e-6, posinf=1e6, neginf=1e-6)
-    positive = np.asarray(fold).reshape(-1)
-    positive = positive[positive > 0]
-    if not len(positive):
-        return 0., 0.
-    return float(np.log10(positive.min())), float(np.log10(positive.max()))
+    on, off = response_pair(L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2)
+    if (not np.size(on) or np.any(on <= 0) or np.any(off <= 0)
+            or not np.isfinite(on).all() or not np.isfinite(off).all()):
+        raise ValueError('Fold range requires positive finite induced and basal responses')
+    values = np.log10(on)-np.log10(off)
+    return float(np.min(values)), float(np.max(values))
 
 
 def align_curve(x, observed, grid, source_curve, master_curve, *, offset=0.0,

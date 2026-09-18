@@ -4,6 +4,7 @@ import contextlib
 from decimal import Decimal, localcontext
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -104,6 +105,28 @@ class FitFixture(unittest.TestCase):
         checks = validation.validate_numerical_results(self.inputs, self.readme, self.result)
         self.assertGreater(len(checks), 75)
 
+    def test_direct_backend_roundtrip_validates_objective_without_floor(self):
+        vector = self.vector.copy()
+        vector[self.layout.T0_variant] = 3
+        loss = core.objective_components_numpy(self.data, self.layout, vector)["objective_total"]
+        result = core.FitResult(core.SCIPY_BACKEND, vector, loss, 0, "success", "synthetic", {})
+        output_root = self.root / "direct"
+        summary = core.write_result(result, self.data, self.layout, output_root)
+        self.assertAlmostEqual(summary["objective_total"], 1-summary["macro_metrics"]["R2_log10"], places=12)
+        checks = validation.validate_numerical_results(self.inputs, self.readme, output_root / result.backend)
+        self.assertTrue(any("objective independently reproduced" in check for check in checks))
+
+    def test_feasible_start_still_optimizes_macro_log_r2(self):
+        initial = self.vector.copy()
+        initial[self.layout.T0_variant] = .03
+        before = floor.per_csv_log_metrics(self.data, self.layout, initial)
+        self.assertTrue(before.passes_R2_log10_floor.all())
+        with contextlib.redirect_stdout(io.StringIO()):
+            fitted, metrics, trace, _ = floor.fit_one_start("feasible", initial, self.data, self.layout, 3)
+        self.assertGreater(len(trace), 1)
+        self.assertGreater(metrics.R2_log10.mean(), before.R2_log10.mean())
+        self.assertTrue(metrics.passes_R2_log10_floor.all())
+
     def test_default_validation_needs_only_numerical_inputs(self):
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "validate_results.py"),
@@ -163,6 +186,43 @@ class FitFixture(unittest.TestCase):
         finally:
             path.write_bytes(original)
 
+    def test_tampered_objective_component_is_rejected(self):
+        path = self.result / "objective_components.csv"
+        original = path.read_bytes()
+        try:
+            frame = pd.read_csv(path)
+            frame.loc[0, "objective_total"] = .25
+            frame.to_csv(path, index=False)
+            with self.assertRaisesRegex(AssertionError, "objective"):
+                validation.validate_numerical_results(self.inputs, self.readme, self.result)
+        finally:
+            path.write_bytes(original)
+
+    def test_tampered_summary_objective_is_rejected(self):
+        path = self.result / "fit_summary.json"
+        original = path.read_bytes()
+        try:
+            summary = json.loads(original)
+            summary["objective_total"] = .25
+            path.write_text(json.dumps(summary), encoding="utf-8")
+            with self.assertRaisesRegex(AssertionError, "objective"):
+                validation.validate_numerical_results(self.inputs, self.readme, self.result)
+        finally:
+            path.write_bytes(original)
+
+    def test_core_saver_rejects_loss_parameter_mismatch(self):
+        result = core.FitResult("invalid_loss", self.vector, .25, 0, "success", "", {})
+        with self.assertRaisesRegex(ValueError, "objective"):
+            core.write_result(result, self.data, self.layout, self.root / "rejected")
+
+    def test_floor_saver_rejects_forged_feasibility(self):
+        wrong = self.vector.copy()
+        wrong[self.layout.T0_variant] = 10
+        candidate = dict(label="forged", vector=wrong, sensor_weights=np.ones(25), feasible=True,
+                         minimum_R2_log10=.9, mean_R2_log10=.95, global_MSE_log10=.001)
+        with self.assertRaisesRegex(ValueError, "candidate"):
+            floor.write_outputs(candidate, [candidate], [], self.data, self.layout, self.root / "rejected", 0)
+
     def test_empty_nonfinite_negative_and_constant_data_rejected(self):
         path = self.inputs / "500.csv"
         original = path.read_bytes()
@@ -213,6 +273,7 @@ class FitFixture(unittest.TestCase):
             fit = core.fit_pytorch(self.data, self.layout, 1, .001, 0, 123, self.vector)
         expected = core.objective_components_numpy(self.data, self.layout, fit.parameter_vector)["objective_total"]
         self.assertAlmostEqual(fit.objective_total, expected, places=13)
+        self.assertAlmostEqual(fit.diagnostics["torch_objective_total"], expected, places=13)
         with self.assertRaises(ValueError):
             core.fit_pytorch(self.data, self.layout, 0, .001, 0, 123)
 

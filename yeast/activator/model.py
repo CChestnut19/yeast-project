@@ -1,7 +1,7 @@
 """Archived activator equations and metrics; Tmax is the TOTAL output ceiling."""
 from __future__ import annotations
 import numpy as np
-from yeast.binding import active_dimer_pool
+from yeast.binding import cic_dimer_pool
 from .settings import TMAX_PRIMARY
 
 
@@ -25,21 +25,9 @@ def _validate_parameters(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax):
 def model_s32_s47(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax=TMAX_PRIMARY):
     _validate_parameters(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax)
     dose = np.asarray(c_i_uM, dtype=float)
-    active_pool = active_dimer_pool(c_tf, 1.0 + kb * dose, kd0 + kd1 * (kb * dose)**2)
+    active_pool = cic_dimer_pool(c_tf, dose, kd0, kb, kd1)
     z = ka * active_pool
     return t0 + (tmax - t0) * z / (1.0 + z)
-
-
-def model_s83_literal(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax=TMAX_PRIMARY):
-    """Retain the source's literal alternative equation as a sensitivity check."""
-    _validate_parameters(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax)
-    c_tf, dose = np.asarray(c_tf, dtype=float), np.asarray(c_i_uM, dtype=float)
-    a = kd0 + kd1 * (kb * dose)**2
-    b = 1.0 + kb * dose
-    root = np.sqrt(b * b + 8.0 * a * c_tf)
-    q = 2.0 * c_tf * c_tf / np.maximum((root + b)**2, 1e-300)
-    occupancy = q * ka / np.maximum(a + q * ka, 1e-300)
-    return t0 + (tmax - t0) * occupancy
 
 
 def _metric_pairs(y, predicted, scale):

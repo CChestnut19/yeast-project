@@ -1,8 +1,6 @@
 """Independent equation and small-workload checks for migrated notebook algorithms."""
 import unittest
 import warnings
-from unittest.mock import patch
-import importlib.util
 
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
@@ -10,21 +8,18 @@ from numpy.testing import assert_allclose, assert_array_equal
 from yeast.analysis import response, response_pair, scan_designs, fast_pareto_2d
 from yeast.activator.model import model_s32_s47
 from yeast.exploratory_models import (
-    dimer_response, monomer_bound_pool, quadratic_activation_literal, heterodimer_free_pools,
-    heterodimer_response_pair, two_state_repression, fixed_induced_root_fold_literal,
+    dimer_response, monomer_bound_pool, heterodimer_free_pools,
+    heterodimer_response_pair, two_state_repression,
     simple_repression_partition_function, simple_repression_pbound,
     simple_repression_foldchange, rob_phillips_allosteric_dimer_fixed_inducer,
     operator_response, solve_operator_target, hybrid_promoter,
-    mismatched_tf_crosstalk_literal,
+    crosstalk_ratio,
 )
 from yeast.curve_analysis import (
     get_steep_interval, saturated_fold_approximation, quality_ratio,
-    log_fold_range_literal, align_curve, grouped_statistics,
+    log_fold_range, align_curve, grouped_statistics,
     alignment_statistics, regression_diagnostics,
 )
-from yeast.fitting import (estimate_kd, estimate_M_literal, estimate_shared_parameters,
-                           epsilon_response_literal, fit_response, fit_shared_then_kd,
-                           fit_notebook_curve_fit, fit_shared_then_kd_adam)
 from yeast.optimization import (fit_yield_gp, sample_candidates, select_candidates,
                                 pairwise_slice, bounded_round_progress)
 from yeast.notebook_parameters import load_notebook_parameters, foldchange_design_parameters
@@ -63,7 +58,6 @@ class ModelMigrationTests(unittest.TestCase):
         assert_allclose(dimer_response(L, kd, d), z/(1+z))
         assert_allclose(dimer_response(L, kd, d, repressor=True), 1/(1+z))
         assert_allclose(monomer_bound_pool(L, 3.), .75*L)
-        assert_allclose(quadratic_activation_literal(L,2.,.3),(4*L**2+.3)/(1+4*L**2+.3))
 
     def test_heterodimer_conservation_and_source_state_rules(self):
         m1, m2, k = np.array([0., .1, 3.]), .5, .02
@@ -82,18 +76,11 @@ class ModelMigrationTests(unittest.TestCase):
         assert_allclose(on, .035485714+p['Imax']*z_on/(1+z_on), atol=1e-10)
         assert_allclose(off, .01+p['Imax']*z_off/(1+z_off), atol=1e-10)
 
-    def test_historical_literal_models_remain_distinct(self):
-        L, kd, k1, k2, k3, I = np.array([.1, 2., 6.]), 4., .02, .3, .7, 10.
-        x1, x2 = np.sqrt(1+8*k2*k2*k3*I*I), np.sqrt(1+8*L*k1)
-        z1, z2 = L/2*(x1-1)/(x1+1)*kd, L/2*(x2-1)/(x2+1)*kd
-        assert_allclose(fixed_induced_root_fold_literal(L,kd,k1,k2,k3,I,20),
-                        (.001+20*z1/(1+z1))/(.001+20*z2/(1+z2)))
-        k31, k32 = .2, .02
-        r1 = np.sqrt((1+k2*I)**2+8*L*(k1+k2*k2*k31*I*I))
-        r2 = np.sqrt((1+k2*I)**2+8*kd*(k1+k2*k2*k32*I*I))
-        z1, z2 = [L/2*(r-(1+k2*I))/(r+(1+k2*I))*kd for r in (r1,r2)]
-        expected = (.035485714+35.84931505*z2/(1+z2))/(.035485714+35.84931505*z1/(1+z1))
-        assert_allclose(mismatched_tf_crosstalk_literal(L,kd,k1,k2,k2,k31,k32,I),expected)
+    def test_crosstalk_and_two_state_comparison(self):
+        L, kd, k1, k2, I = np.array([.1, 2., 6.]), 4., .02, .3, 10.
+        first = original_response(L,kd,k1,k2,.2,35.84931505,.035485714,I)
+        second = original_response(L,kd,k1,k2,.02,35.84931505,.035485714,I)
+        assert_allclose(crosstalk_ratio(L,kd,k1,k2,k2,.2,.02,I),second/first)
         active, inactive = (1+I/.7)**2, (1+I/.2)**2
         assert_allclose(two_state_repression(L,kd,I,.7,.2),1/(1+active/(active+10*inactive)*L*kd))
 
@@ -126,8 +113,8 @@ class ModelMigrationTests(unittest.TestCase):
         I1, I2 = np.array([0.,1.,10.]),np.array([10.,1.,0.])
         ap = original_response(10., **a,Imax=1,I0=0,I=I1)
         rp = original_response(10., **r,Imax=1,I0=0,I=I2)
-        assert_allclose(hybrid_promoter(10,10,I1,I2,a,r,35.84931505,.687512595,.015930056),
-                        35.84931505*.687512595*ap*(1-rp)+.015930056,rtol=1e-10)
+        assert_allclose(hybrid_promoter(10,10,I1,I2,a,r,35.85,baseline=.015930056),
+                        (35.85-.015930056)*ap*(1-rp)**2+.015930056,rtol=1e-10)
 
 
 class AnalysisMigrationTests(unittest.TestCase):
@@ -162,15 +149,15 @@ class AnalysisMigrationTests(unittest.TestCase):
         assert_allclose(saturated_fold_approximation(L,k1,kd),old,rtol=1e-10)
         self.assertAlmostEqual(saturated_fold_approximation(0,k1,kd),kd/(4*k1))
 
-    def test_quality_variants_do_not_silently_fix_nuclear_equation(self):
+    def test_nuclear_quality_and_fold_use_canonical_parameters(self):
         L=np.array([.1,1.,5.]);k1,k2,k3,kd,I,kx1,kx2=.02,.3,.4,5.,10.,2.,.7
         self.assertAlmostEqual(quality_ratio(k1,k2,k3,I),k3*k2**2*I**2/k1)
-        self.assertAlmostEqual(quality_ratio(k1,k2,k3,I,kx1=kx1,kx2=kx2),k3*k2**2*I**2*kx2**2/(k1*kx1**2))
-        x1=np.sqrt((1+kx1)**2+8*L*k1*(1+kx1**2))
-        x2=np.sqrt((1+kx1)**2+8*L*k2*k2*k3*I*I*(1+kx2*kx2))
-        fold=(1/((x1-1)/(x1+1))+L*kd/2)/(1/((x2-1)/(x2+1))+L*kd/2)
-        assert_allclose(log_fold_range_literal(L,k1,k2,k3,kd,I,is_nuclear=True,kx1=kx1,kx2=kx2),
-                        np.log10([fold.min(),fold.max()]))
+        self.assertAlmostEqual(quality_ratio(k1,k2,k3,I,kx1=kx1,kx2=kx2),
+                               k3*k2**2*I**2*(1+kx2**2)/(k1*(1+kx1**2)))
+        on=original_response(L,kd,k1,k2,k3,1.,0.,I,kx1,kx2)
+        off=original_response(L,kd,k1,k2,k3,1.,0.,0.,kx1,kx2)
+        assert_allclose(log_fold_range(L,k1,k2,k3,kd,I,kx1=kx1,kx2=kx2),
+                        np.log10([(on/off).min(),(on/off).max()]))
 
     def test_alignment_offsets_interpolation_and_statistics(self):
         grid=np.array([1.,2.,3.]); source=2*grid; master=3*grid
@@ -207,107 +194,6 @@ class AnalysisMigrationTests(unittest.TestCase):
         self.assertEqual(len(foldchange_design_parameters(1)[0]),20)
         self.assertEqual(len(foldchange_design_parameters(2)[0]),5)
         self.assertEqual(len(foldchange_design_parameters(3)[0]),15)
-
-
-class FittingMigrationTests(unittest.TestCase):
-    def test_original_curve_fit_variants_and_penalty_fallback(self):
-        import yeast.fitting as fitting
-        L=np.tile([.2,1.,3.,10.],5);I=np.repeat([0.,.1,1.,10.,100.],4)
-        fixed={'kd':3.,'Imax':20.,'I0':.02}
-        initial={'k1':.02,'k2':.3,'k3':.6}
-        y=response(L,I=I,**fixed,**initial)
-        original=fitting.curve_fit
-        calls=[]
-
-        def observed_curve_fit(model,x,y,**kwargs):
-            calls.append(kwargs)
-            assert_allclose(model(x,10.,.3,.6),np.full(len(L),1e10))
-            assert_allclose(model(x,.02,-.3,.6),np.full(len(L),1e10))
-            if len(calls)==1:raise RuntimeError('Exercise historical bounded-fit fallback')
-            return original(model,x,y,**kwargs)
-
-        with patch.object(fitting,'curve_fit',side_effect=observed_curve_fit):
-            result=fit_notebook_curve_fit(L,I,y,cell=0,fixed=fixed,
-                                         initial={'k1':.03,'k2':.2,'k3':.8},
-                                         maxfev=1000,fallback_maxfev=1000)
-        self.assertTrue(result['used_unbounded_fallback'])
-        self.assertNotIn('bounds',calls[1])
-        assert_allclose(result['prediction'],y)
-        for cell in (1,2):
-            params={**initial,'kx1':.1,'kx2':.2} if cell==1 else initial
-            target=response(L,I=I,**fixed,**params)
-            start={**params,'k1':.03,'k2':.2,'k3':.8}
-            result=fit_notebook_curve_fit(L,I,target,cell=cell,fixed=fixed,initial=start,maxfev=10000)
-            assert_allclose(result['prediction'],target,rtol=1e-6)
-            self.assertEqual(result['scale'],'log10' if cell==2 else 'raw')
-
-    @unittest.skipUnless(importlib.util.find_spec('torch'), 'Torch is an optional historical backend')
-    def test_optional_adam_runs_both_literal_variants(self):
-        L=np.array([.2,1.,3.,10.]);I=np.array([0.,1.,10.,100.])
-        common={'k1':.001,'k2':.02735345,'k3':.50865889}
-        for variant in ('torch_epsilon_literal','nuclear_clamped'):
-            initial={**common,'kx1':.2,'kx2':.0001} if variant=='nuclear_clamped' else common
-            expected=response(L,I=I,kd=10.,Imax=13.60910816,I0=.059199421,
-                              **{**initial,**({'kx2':.001} if variant=='nuclear_clamped' else {})})
-            if variant=='torch_epsilon_literal':
-                expected=epsilon_response_literal(L,I=I,kd=10.,Imax=13.60910816,I0=.059199421,**initial)
-            data=[{'name':'A','L':L,'I':I,'observed':expected},
-                  {'name':'B','L':L,'I':I,'observed':expected}]
-            untrained=fit_shared_then_kd_adam(data,initial_shared=initial,Imax=13.60910816,
-                                            I0=.059199421,variant=variant,shared_steps=0,kd_steps=0)
-            assert_allclose(untrained['shared']['prediction'],np.tile(expected,2),rtol=2e-4,atol=2e-6)
-            trained=fit_shared_then_kd_adam(data,initial_shared=initial,Imax=13.60910816,
-                                          I0=.059199421,variant=variant,shared_steps=2,kd_steps=2)
-            self.assertTrue(trained['finite'])
-            self.assertEqual(set(trained['datasets']),{'A','B'})
-
-    def test_parameter_estimation_inversion_and_literal_M(self):
-        L,k1,kd,amplitude,baseline=1.,.03,4.,2.5,.01
-        root=np.sqrt(1+8*L*k1);pool=L/2*(root-1)/(root+1)
-        basal=baseline+amplitude*kd*pool/(1+kd*pool)
-        self.assertAlmostEqual(estimate_kd(baseline,basal,k1),kd)
-        fraction=.4;maximum=baseline+amplitude*fraction;I=3.
-        x1sq=1+8*L*(fraction/(1-fraction)/kd/(L/2))
-        self.assertAlmostEqual(estimate_M_literal(baseline,maximum,kd,I),(x1sq-1)/(8*L*I**2))
-        data=[{'ID':'A-X','I0':.01,'P0':.2,'Pmax':1.,'I':3.},
-              {'ID':'B-X','I0':.02,'P0':.3,'Pmax':1.2,'I':5.},
-              {'ID':'A-Y','I0':.01,'P0':.15,'Pmax':.9,'I':3.}]
-        result=estimate_shared_parameters(data)
-        self.assertEqual(len(result['DBD']),2)
-        self.assertEqual(len(result['LBD']),2)
-        fraction=((.2+.3)/2-(.01+.02)/2)/2.5
-        expected=abs(((1+2*fraction)/(1-2*fraction))**2-1)/8
-        self.assertAlmostEqual(result['LBD'].set_index('LBD').loc['X','k1'],expected)
-
-    def test_raw_and_log_fits_recover_synthetic_curve_with_per_row_kd(self):
-        L=np.tile(np.array([.2,1.,3.,10.]),5)
-        I=np.repeat(np.array([0.,.1,1.,10.,100.]),4)
-        kd=np.tile([1.,2.,4.,8.],5)
-        fixed={'kd':kd,'Imax':20.,'I0':.02}
-        actual={'k1':.02,'k2':.3,'k3':.6}
-        y=response(L=L,I=I,**fixed,**actual)
-        for scale in ('raw','log10'):
-            fit=fit_response(L,I,y,fixed=fixed,initial={'k1':.03,'k2':.2,'k3':.8},scale=scale)
-            self.assertTrue(fit['success'],fit['message'])
-            assert_allclose(fit['prediction'],y,rtol=1e-6)
-            assert_allclose(list(fit['parameters'].values()),list(actual.values()),rtol=1e-5)
-        with self.assertRaises(ValueError):fit_response(L,I,-y,fixed=fixed,initial=actual,scale='log10')
-
-    def test_torch_epsilon_formula_and_two_stage_objective(self):
-        L=np.array([0.,.1,1.,5.]);I=np.array([0.,1.,10.,100.]);e=1e-9
-        p={'kd':10.,'k1':.001,'k2':.02735345,'k3':.50865889,'Imax':13.60910816,'I0':.059199421}
-        root=np.sqrt((p['k2']*I+1)**2+8*L*(p['k2']**2*p['k3']*I**2+p['k1'])+e)
-        b=1+p['k2']*I
-        expected=p['I0']+p['Imax']*((L/2+e)*((root-b+e)/(root+b)+e)*(p['kd']+e)/(1+(L/2+e)*((root-b+e)/(root+b+e)+e)*(p['kd']+e)))
-        assert_allclose(epsilon_response_literal(L,I=I,**p),expected)
-        L=np.tile([.2,1.,3.],4);I=np.repeat([0.,1.,10.,100.],3)
-        y=response(L,I=I,**p)
-        datasets=[{'name':'A','L':L,'I':I,'observed':y},{'name':'B','L':L,'I':I,'observed':y}]
-        fit=fit_shared_then_kd(datasets,initial_shared={k:p[k] for k in ('k1','k2','k3')},Imax=p['Imax'],I0=p['I0'])
-        self.assertTrue(fit['success'])
-        for result in fit['datasets'].values():
-            self.assertAlmostEqual(result['parameters']['kd'],10.,places=6)
-            self.assertLess(result['MSE'],1e-15)
 
 
 class OptimizationMigrationTests(unittest.TestCase):

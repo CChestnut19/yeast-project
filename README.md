@@ -1,6 +1,6 @@
 # Yeast and mammalian regulatory algorithms
 
-**Algorithm-only manuscript draft — `0.2.0-draft.1`.** This repository contains numerical models, parameter estimation/fitting, response analysis and validation. It writes numerical CSV/JSON results. Figure rendering and document generation have been removed.
+**Algorithm-only manuscript draft — `0.2.1-draft.1`.** This repository contains numerical models, parameter estimation/fitting, response analysis and validation. It writes numerical CSV/JSON results. Figure rendering and document generation have been removed.
 
 ## Code layout
 
@@ -38,6 +38,8 @@ The fixed environment contains NumPy, SciPy, pandas and scikit-learn with their 
 The demo checks 1,141 Note 10 measurements and 216 Note 11 means across 12 conditions/panels. It produces predictions, metrics, provenance, validation reports and execution timings. Missing-data workflows are explicitly marked `not_run`.
 
 ## Scientific scope
+
+All CIC parameter fitters maximize **R² of log10-transformed responses**. Shared fits use equal-weight per-dataset log10 R²; raw R² is diagnostic only. [Model equations and fitting objective](docs/MODEL_AND_FITTING.md) defines parameter conversions, group normalization and corrected notebook formulas.
 
 - Note 10 pooled raw R²: `0.8769196761349058`; pooled log10 R²: `0.8721193770575127`.
 - Note 11 A2 log10 R²: `-1.073005331220207`. Negative values are retained.

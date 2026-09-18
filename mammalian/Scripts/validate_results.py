@@ -1,4 +1,4 @@
-"""Validate saved per-sensor log10-R2-floor results against the original numerical inputs."""
+"""Validate saved macro log10-R2 fits and optional per-sensor floor constraints."""
 
 from __future__ import annotations
 
@@ -32,6 +32,8 @@ def validate_numerical_results(input_dir: Path, readme: Path, result_dir: Path) 
     checks = []
     require(bool(((vector >= lower) & (vector <= upper)).all()), "Parameter vector is within model bounds", checks)
     predicted, terms = core.predict_rpu_numpy(data, layout, vector)
+    require(bool(np.isfinite(predicted).all() and (predicted > 0).all()),
+            "Predictions are finite and strictly positive for log10 R2", checks)
     saved = pd.read_csv(result_dir / "predictions.csv")
     keys = ["csv", "source_row"]
     require(not saved.duplicated(keys).any(), "Saved observation keys are unique", checks)
@@ -47,6 +49,14 @@ def validate_numerical_results(input_dir: Path, readme: Path, result_dir: Path) 
                 f"Saved {column} matches original observations", checks)
     require(np.allclose(saved["RPU_predicted"], predicted, rtol=1e-10, atol=1e-12),
             "Saved predictions are reproduced from the parameter vector", checks)
+    for column, values in {
+        "log10_RPU_observed": data.observed_log10,
+        "log10_RPU_predicted": np.log10(predicted),
+        "residual_raw": data.observed_rpu - predicted,
+        "residual_log10": data.observed_log10 - np.log10(predicted),
+    }.items():
+        require(np.allclose(saved[column], values, rtol=1e-10, atol=1e-12),
+                f"Saved {column} is independently reproduced", checks)
     for column, values in terms.items():
         require(np.allclose(saved[column], values, rtol=1e-10, atol=1e-12),
                 f"Saved model term {column} is reproduced", checks)
@@ -68,15 +78,32 @@ def validate_numerical_results(input_dir: Path, readme: Path, result_dir: Path) 
                     and np.allclose(ordered["Tmax"], core.TMAX)
                     and (ordered["operator_number"] == core.OPERATOR_NUMBER).all(),
                     "DBD fixed-parameter metadata agrees with the model", checks)
-    metrics = pd.read_csv(result_dir / "constraint_metrics.csv").set_index("csv")
-    require(metrics.index.is_unique and set(metrics.index) == {m.csv_name for m in data.mappings},
-            "Constraint metrics cover exactly the mapped sensors", checks)
+    summary = json.loads((result_dir / "fit_summary.json").read_text(encoding="utf-8"))
+    has_floor = summary["backend"] == BACKEND.name
+    require(has_floor or summary["backend"] in {core.SCIPY_BACKEND, core.TORCH_BACKEND},
+            "Saved backend declares a supported macro log10 R2 objective", checks)
+    if has_floor:
+        metrics = pd.read_csv(result_dir / "constraint_metrics.csv").set_index("csv")
+        require(metrics.index.is_unique and set(metrics.index) == {m.csv_name for m in data.mappings},
+                "Constraint metrics cover exactly the mapped sensors", checks)
     recomputed_r2 = []
+    recomputed_raw_r2 = []
+    normalized_log_sse = []
     for index, mapping in enumerate(data.mappings):
         mask = data.csv_index == index
-        raw_r2 = core.r_squared(data.observed_rpu[mask], predicted[mask])
-        log_r2 = core.r_squared(data.observed_log10[mask], np.log10(predicted[mask]))
+        observed = data.observed_log10[mask]
+        sse_log = float(np.sum((observed - np.log10(predicted[mask]))**2))
+        sst_log = float(np.sum((observed - observed.mean())**2))
+        raw = data.observed_rpu[mask]
+        sse_raw = float(np.sum((raw - predicted[mask])**2))
+        sst_raw = float(np.sum((raw - raw.mean())**2))
+        raw_r2 = 1.0 - sse_raw / sst_raw
+        log_r2 = 1.0 - sse_log / sst_log
         recomputed_r2.append(log_r2)
+        recomputed_raw_r2.append(raw_r2)
+        normalized_log_sse.append(sse_log / sst_log)
+        if not has_floor:
+            continue
         row = metrics.loc[mapping.csv_name]
         require(np.isclose(row["R2_raw"], raw_r2, rtol=1e-10, atol=1e-12)
                 and np.isclose(row["R2_log10"], log_r2, rtol=1e-10, atol=1e-12),
@@ -85,12 +112,64 @@ def validate_numerical_results(input_dir: Path, readme: Path, result_dir: Path) 
         require(str(row["passes_R2_log10_floor"]).lower() == "true"
                 and np.isclose(float(row["target_R2_log10"]), TARGET),
                 f"{mapping.csv_name} constraint flags match recomputed R2", checks)
-    summary = json.loads((result_dir / "fit_summary.json").read_text(encoding="utf-8"))
-    constraint = summary["constraint"]
-    require(constraint["constraint_satisfied"] is True
-            and int(constraint["passing_sensor_count"]) == len(data.mappings)
-            and np.isclose(float(constraint["minimum_per_sensor_R2_log10"]), min(recomputed_r2), rtol=1e-10, atol=1e-12),
-            "Fit summary agrees with independently recomputed constraints", checks)
+        expected_sensor = {"SSE_log10": sse_log, "TSS_log10": sst_log,
+                           "normalized_SSE_log10": sse_log / sst_log,
+                           "SSE_raw": sse_raw, "TSS_raw": sst_raw,
+                           "normalized_SSE_raw": sse_raw / sst_raw, "n": int(mask.sum())}
+        require(all(np.isclose(float(row[key]), value, rtol=1e-10, atol=1e-12)
+                    for key, value in expected_sensor.items()),
+                f"{mapping.csv_name} saved SSE and SST independently reproduced", checks)
+
+    loss = float(np.mean(normalized_log_sse))
+    expected_components = {"objective_total": loss, "data_objective": loss,
+                           "macro_log10_1_minus_R2": loss,
+                           "macro_R2_log10": float(np.mean(recomputed_r2)),
+                           "macro_R2_raw": float(np.mean(recomputed_raw_r2))}
+    require(summary["objective"] == core.OBJECTIVE_DESCRIPTION
+            and np.isclose(float(summary["objective_total"]), loss, rtol=1e-10, atol=1e-12),
+            "Fit summary objective independently reproduced as macro per-CSV log10 R2 loss", checks)
+    require(np.isclose(float(summary["macro_metrics"]["R2_log10"]), np.mean(recomputed_r2), rtol=1e-10, atol=1e-12)
+            and np.isclose(float(summary["macro_metrics"]["R2_raw"]), np.mean(recomputed_raw_r2), rtol=1e-10, atol=1e-12),
+            "Fit summary diagnostic macro R2 independently reproduced", checks)
+    if has_floor:
+        expected_constraint = {
+            "global_unweighted_MSE_log10": float(np.mean((data.observed_log10 - np.log10(predicted))**2)),
+            "minimum_per_sensor_R2_log10": min(recomputed_r2),
+            "mean_per_sensor_R2_log10": float(np.mean(recomputed_r2)),
+            "target_R2_log10": TARGET, "passing_sensor_count": len(data.mappings),
+            "included_sensor_count": len(data.mappings), "constraint_satisfied": True,
+        }
+        constraint = summary["constraint"]
+        require(set(constraint) == set(expected_constraint)
+                and constraint["constraint_satisfied"] is True
+                and all(np.isclose(float(constraint[key]), value, rtol=1e-10, atol=1e-12)
+                        for key, value in expected_constraint.items()),
+                "Fit summary agrees with independently recomputed constraints", checks)
+        expected_components.update(expected_constraint)
+        comparison = pd.read_csv(result_dir / "candidate_comparison.csv")
+        selected = comparison.loc[comparison["selected"].astype(str).str.lower() == "true"]
+        require(len(selected) == 1, "Candidate comparison has exactly one selected fit", checks)
+        chosen = selected.iloc[0]
+        require(chosen["start"] == summary["selected_start"]
+                and str(chosen["feasible"]).lower() == "true"
+                and all(np.isclose(float(chosen[key]), value, rtol=1e-10, atol=1e-12)
+                        for key, value in {"objective_total": loss,
+                                           "minimum_R2_log10": min(recomputed_r2),
+                                           "mean_R2_log10": np.mean(recomputed_r2),
+                                           "global_MSE_log10": expected_constraint["global_unweighted_MSE_log10"]}.items()),
+                "Selected candidate objective and constraints independently reproduced", checks)
+        feasible = comparison.loc[comparison["feasible"].astype(str).str.lower() == "true"]
+        require(float(chosen["mean_R2_log10"]) >= float(feasible["mean_R2_log10"].max()) - 1e-12,
+                "Selected candidate maximizes reported feasible macro log10 R2", checks)
+
+    components = pd.read_csv(result_dir / "objective_components.csv")
+    require(len(components) == 1 and set(components.columns) == set(expected_components),
+            "Saved objective components have exactly the expected fields", checks)
+    for source, values in (("CSV", components.iloc[0]), ("summary", summary["objective_components"])):
+        require(set(values.keys()) == set(expected_components)
+                and all(np.isclose(float(values[key]), value, rtol=1e-10, atol=1e-12)
+                        for key, value in expected_components.items()),
+                f"Saved {source} objective components independently reproduced", checks)
     return checks
 
 

@@ -1,6 +1,6 @@
 {
   "package_title": "yeast-project reproduction code",
-  "version": "0.2.0-draft.1",
+  "version": "0.2.1-draft.1",
   "status": "DRAFT",
   "repository": "https://github.com/CChestnut19/yeast-project",
   "journal_family": "Nature Portfolio",
@@ -27,5 +27,6 @@
     "Supply missing experimental inputs and verify all claimed manuscript results",
     "Approve a final immutable release and archival DOI or other persistent identifier"
   ],
-  "scope": "Numerical algorithms only; rendering and document generation removed"
+  "scope": "Numerical algorithms only; rendering and document generation removed",
+  "fitting_objective": "Maximize equal-dataset mean R2 of log10-transformed responses; raw R2 is diagnostic only"
 }

@@ -4,10 +4,11 @@ from pathlib import Path
 
 
 def load_notebook_parameters(notebook, cell):
-    """Return parameters, source hash and optional grid/fit recipes for one cell.
+    """Return original parameters, source hash and historical recipes for one cell.
 
     ``cell`` is the zero-based index in the original notebook, including markdown
-    cells. Filesystem access occurs only on this explicit call.
+    cells. historical_fit is provenance, not a current optimizer configuration.
+    Filesystem access occurs only on this explicit call.
     """
     path = Path(__file__).with_name('notebook_parameters.json')
     with path.open(encoding='utf-8') as stream:

@@ -78,7 +78,6 @@ def reconstruct(raw_rows, dbd_params, lbd_params, output_dir: Path, panels=PANEL
             ("Tmax35_sensitivity", "within_batch_conditional_means", "raw", y_cond, np.array([r["prediction_Tmax35_rpu"] for r in cond]), "S32-S47+S11; T0,variant; Tmax=35"),
             ("global_T0_sensitivity", "within_batch_conditional_means", "raw", y_cond, np.array([r["prediction_global_T0_0_035_rpu"] for r in cond]), "S32-S47+S11; T0=0.035; Tmax=35.85"),
             ("green_excluded_sensitivity", "within_batch_conditional_means_without_green_fill", "raw", np.asarray(no_green_y, float), np.asarray(no_green_pred, float), "Primary raw-scale model; trailing-star and green-filled source values excluded; batches not pooled"),
-            ("literal_S83_check", "within_batch_conditional_means", "raw", y_cond, np.array([r["prediction_literal_S83_rpu"] for r in cond]), "Literal transcription of Eq. S83; T0,variant; Tmax=35.85"),
         ]
         for analysis_id, aggregation, scale, y, pred, model_note in variants:
             value, n_used, n_omitted = r2_coefficient(y, pred, scale)

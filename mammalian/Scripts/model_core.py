@@ -8,11 +8,10 @@ Both fitting backends use the same deterministic model and parameter hierarchy:
 * Tmax is fixed to 13.61 RPU.
 * Seven independent operator sites are represented by
   p7 = 1 - (1 - p1)**7.
-* Both SciPy curve_fit and PyTorch/Adam minimize the same balanced objective:
-  0.5 * macro mean(1 - R2_raw) + 0.5 * macro mean(1 - R2_log10).
+* Both SciPy curve_fit and PyTorch/Adam minimize the same log10 objective:
+  macro mean per-CSV (1 - R2_log10).
   Every CSV contributes equally.
-* A weak, documented shape prior is applied only to LBDs for which every
-  available CSV contains two inducer concentrations (endpoint-only data).
+* Raw-scale R2 is diagnostic only. No shape prior enters the objective.
 
 CSV/sensor/DBD/LBD mappings are parsed from the project README. 402.csv is
 retained as an input control but excluded from CIC fitting.
@@ -45,17 +44,11 @@ ANCHOR_DBD = "lexAec87"
 ANCHOR_KA = 9.15
 EXCLUDED_CSV = {"402.csv"}
 REQUIRED_COLUMNS = ("LBD", "inducer", "RPU")
-RAW_R2_WEIGHT = 0.5
-LOG_R2_WEIGHT = 0.5
-SHAPE_PRIOR_WEIGHT = 0.01
-SHAPE_PRIOR_CENTER_LOG10_KB = -1.101228681676726
-SHAPE_PRIOR_SCALE_LOG10_KB = 2.1777273882
-SHAPE_PRIOR_CENTER_LOG10_Q = 4.6282828898190935
-SHAPE_PRIOR_SCALE_LOG10_Q = 6.6810752211
+OBJECTIVE_DESCRIPTION = "macro mean per-CSV (1 - R2_log10)"
 CURVE_GRID_POINTS = 400
 ZERO_ENDPOINT_GRID_DECADES = 6.0
-SCIPY_BACKEND = "scipy_curve_fit_hybrid_macro_r2"
-TORCH_BACKEND = "pytorch_adam_hybrid_macro_r2"
+SCIPY_BACKEND = "scipy_curve_fit_macro_log10_r2"
+TORCH_BACKEND = "pytorch_adam_macro_log10_r2"
 
 
 @dataclass(frozen=True)
@@ -206,7 +199,7 @@ def load_fit_data(input_dir: Path, mappings: Sequence[SensorMapping]) -> FitData
         frames.append(frame)
 
     combined = pd.concat(frames, ignore_index=True)
-    return FitData(
+    data = FitData(
         frame=combined,
         mappings=included,
         ctf_all=combined["LBD"].to_numpy(dtype=float),
@@ -217,6 +210,8 @@ def load_fit_data(input_dir: Path, mappings: Sequence[SensorMapping]) -> FitData
         dbd_index=combined["dbd_index"].to_numpy(dtype=int),
         csv_index=combined["csv_index"].to_numpy(dtype=int),
     )
+    objective_row_scales(data)
+    return data
 
 
 class ParameterLayout:
@@ -365,80 +360,58 @@ def endpoint_only_lbd_indices(data: FitData, layout: ParameterLayout) -> np.ndar
     )
 
 
-def objective_row_scales(data: FitData) -> tuple[np.ndarray, np.ndarray]:
-    """Per-row scales whose squared residual sum equals the macro R2 loss."""
+def log10_positive(values: np.ndarray, name: str = "RPU") -> np.ndarray:
+    """Reject invalid log-scale values instead of clipping them into observations."""
+    values = np.asarray(values, dtype=float)
+    if values.size == 0 or not np.isfinite(values).all() or np.any(values <= 0):
+        raise ValueError(f"{name} must be nonempty, finite and strictly positive")
+    return np.log10(values)
+
+
+def objective_row_scales(data: FitData) -> np.ndarray:
+    """Return 1/sqrt(CSV_count * SST_log10) per row for equal-CSV R2 loss."""
 
     csv_count = len(data.mappings)
-    raw_scales = np.empty_like(data.observed_rpu)
-    log_scales = np.empty_like(data.observed_log10)
+    observed_log10 = log10_positive(data.observed_rpu, "Observed RPU")
+    if csv_count == 0 or not np.array_equal(data.observed_log10, observed_log10):
+        raise ValueError("Observed log10 RPU must match positive input observations")
+    if data.csv_index.shape != observed_log10.shape or set(data.csv_index) != set(range(csv_count)):
+        raise ValueError("CSV indices must cover exactly the mapped observation groups")
+    log_scales = np.empty_like(observed_log10)
     for csv_index in range(csv_count):
         mask = data.csv_index == csv_index
-        observed_raw = data.observed_rpu[mask]
         observed_log = data.observed_log10[mask]
-        tss_raw = float(np.sum(np.square(observed_raw - np.mean(observed_raw))))
         tss_log = float(np.sum(np.square(observed_log - np.mean(observed_log))))
-        if tss_raw <= 0.0 or tss_log <= 0.0:
+        if np.all(observed_log == observed_log[0]) or not np.isfinite(tss_log) or tss_log <= 0.0:
             raise ValueError(
                 f"CSV {data.mappings[csv_index].csv_name} has zero variance and "
                 "cannot contribute a per-CSV R2 objective."
             )
-        raw_scales[mask] = math.sqrt(RAW_R2_WEIGHT / (csv_count * tss_raw))
-        log_scales[mask] = math.sqrt(LOG_R2_WEIGHT / (csv_count * tss_log))
-    return raw_scales, log_scales
-
-
-def shape_prior_residuals_numpy(
-    vector: np.ndarray,
-    layout: ParameterLayout,
-    endpoint_indices: np.ndarray,
-) -> np.ndarray:
-    """Weak empirical-Bayes prior on endpoint-only log10(Kb) and log10(Q)."""
-
-    if endpoint_indices.size == 0 or SHAPE_PRIOR_WEIGHT <= 0.0:
-        return np.empty(0, dtype=float)
-    log_kd0 = vector[layout.log_Kd0][endpoint_indices]
-    log_kb = vector[layout.log_Kb][endpoint_indices]
-    log_kd1 = vector[layout.log_Kd1][endpoint_indices]
-    log_q = 2.0 * log_kb + log_kd1 - log_kd0
-    standardized = np.concatenate(
-        (
-            (log_kb - SHAPE_PRIOR_CENTER_LOG10_KB) / SHAPE_PRIOR_SCALE_LOG10_KB,
-            (log_q - SHAPE_PRIOR_CENTER_LOG10_Q) / SHAPE_PRIOR_SCALE_LOG10_Q,
-        )
-    )
-    return standardized * math.sqrt(SHAPE_PRIOR_WEIGHT / standardized.size)
+        log_scales[mask] = 1.0 / math.sqrt(csv_count * tss_log)
+    return log_scales
 
 
 def objective_components_numpy(
     data: FitData,
     layout: ParameterLayout,
     vector: np.ndarray,
-    raw_scales: np.ndarray | None = None,
     log_scales: np.ndarray | None = None,
-    endpoint_indices: np.ndarray | None = None,
 ) -> dict[str, float]:
-    if raw_scales is None or log_scales is None:
-        raw_scales, log_scales = objective_row_scales(data)
-    if endpoint_indices is None:
-        endpoint_indices = endpoint_only_lbd_indices(data, layout)
+    if log_scales is None:
+        log_scales = objective_row_scales(data)
     predicted, _ = predict_rpu_numpy(data, layout, vector)
-    raw_loss = float(
-        np.sum(np.square((predicted - data.observed_rpu) * raw_scales))
-    )
-    predicted_log = np.log10(np.clip(predicted, 1e-300, None))
+    predicted_log = log10_positive(predicted, "Predicted RPU")
     log_loss = float(
         np.sum(np.square((predicted_log - data.observed_log10) * log_scales))
     )
-    prior_residuals = shape_prior_residuals_numpy(vector, layout, endpoint_indices)
-    prior_loss = float(np.sum(np.square(prior_residuals)))
+    raw_r2 = [r_squared(data.observed_rpu[data.csv_index == index], predicted[data.csv_index == index])
+              for index in range(len(data.mappings))]
     return {
-        "weighted_macro_raw_1_minus_R2": raw_loss,
-        "weighted_macro_log10_1_minus_R2": log_loss,
-        "data_objective": raw_loss + log_loss,
-        "shape_prior_penalty": prior_loss,
-        "objective_total": raw_loss + log_loss + prior_loss,
-        "macro_R2_raw": 1.0 - raw_loss / RAW_R2_WEIGHT,
-        "macro_R2_log10": 1.0 - log_loss / LOG_R2_WEIGHT,
+        "macro_log10_1_minus_R2": log_loss,
+        "data_objective": log_loss,
+        "objective_total": log_loss,
+        "macro_R2_raw": float(np.mean(raw_r2)),
+        "macro_R2_log10": 1.0 - log_loss,
     }
 
 
@@ -448,7 +421,7 @@ def fit_scipy(
     max_nfev: int,
     starts: int,
 ) -> FitResult:
-    """Fit the shared model with curve_fit using balanced macro-R2 residuals."""
+    """Fit the shared model with curve_fit using equal-CSV log10-R2 residuals."""
 
     if starts < 1 or max_nfev < 1:
         raise ValueError("starts and max_nfev must be positive")
@@ -462,23 +435,16 @@ def fit_scipy(
         ) from exc
 
     lower, upper = layout.bounds()
-    raw_scales, log_scales = objective_row_scales(data)
-    endpoint_indices = endpoint_only_lbd_indices(data, layout)
-    residual_count = data.observed_rpu.size * 2 + endpoint_indices.size * 2
+    log_scales = objective_row_scales(data)
+    residual_count = data.observed_rpu.size
     dummy_x = np.arange(residual_count, dtype=float)
     zero_target = np.zeros(residual_count, dtype=float)
 
     def model(_: np.ndarray, *flat_parameters: float) -> np.ndarray:
         vector = np.asarray(flat_parameters)
         predicted, _terms = predict_rpu_numpy(data, layout, vector)
-        predicted_log = np.log10(np.clip(predicted, 1e-300, None))
-        return np.concatenate(
-            (
-                (predicted - data.observed_rpu) * raw_scales,
-                (predicted_log - data.observed_log10) * log_scales,
-                shape_prior_residuals_numpy(vector, layout, endpoint_indices),
-            )
-        )
+        predicted_log = log10_positive(predicted, "Predicted RPU")
+        return (predicted_log - data.observed_log10) * log_scales
 
     best: tuple[float, np.ndarray, np.ndarray, int] | None = None
     failures: list[str] = []
@@ -499,7 +465,7 @@ def fit_scipy(
                 gtol=1e-11,
             )
             components = objective_components_numpy(
-                data, layout, popt, raw_scales, log_scales, endpoint_indices
+                data, layout, popt, log_scales
             )
             objective = components["objective_total"]
             if best is None or objective < best[0]:
@@ -513,7 +479,7 @@ def fit_scipy(
     objective, popt, pcov, best_start = best
     finite_covariance = bool(np.isfinite(pcov).all())
     components = objective_components_numpy(
-        data, layout, popt, raw_scales, log_scales, endpoint_indices
+        data, layout, popt, log_scales
     )
     return FitResult(
         backend=SCIPY_BACKEND,
@@ -528,11 +494,21 @@ def fit_scipy(
             "covariance_all_finite": finite_covariance,
             "max_nfev": max_nfev,
             "objective_components": components,
-            "endpoint_only_prior_LBDs": [
-                layout.lbd_names[index] for index in endpoint_indices
-            ],
         },
     )
+
+
+def cic_response_torch(inducer, ctf_all, Kd0, Kb, Kd1, KA, T0_variant, tmax=TMAX):
+    """Differentiable version of the same stable n=7 equation; Torch is optional."""
+    import torch
+
+    B = 1.0 + Kb * inducer
+    D = Kd0 + Kb.square() * Kd1 * inducer.square()
+    S = torch.sqrt(B.square() + 8.0 * ctf_all * D)
+    ctf_eff = D * (2.0 * ctf_all / (S + B)).square()
+    Z = KA * ctf_eff
+    p7 = -torch.expm1(-OPERATOR_NUMBER * torch.log1p(Z))
+    return T0_variant + (tmax - T0_variant) * p7
 
 
 def fit_pytorch(
@@ -545,7 +521,7 @@ def fit_pytorch(
     initial_vector: np.ndarray | None = None,
     initialization_label: str = "layout_initial_vector_variant_0",
 ) -> FitResult:
-    """Fit the same analytic model and balanced macro-R2 objective with Adam."""
+    """Fit the same analytic model and equal-CSV log10-R2 objective with Adam."""
 
     if epochs < 1 or not np.isfinite(learning_rate) or learning_rate <= 0 or patience < 0:
         raise ValueError("epochs and learning_rate must be positive; patience must be non-negative")
@@ -555,7 +531,7 @@ def fit_pytorch(
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "PyTorch backend requires torch. Install dependencies with:\n"
-            "  python -m pip install -r Scripts/requirements-main-supp-n7.txt"
+            "  python -m pip install -r requirements-torch.txt"
         ) from exc
 
     torch.manual_seed(seed)
@@ -582,13 +558,9 @@ def fit_pytorch(
 
     ctf_all = torch.tensor(data.ctf_all, dtype=dtype, device=device)
     inducer = torch.tensor(data.inducer, dtype=dtype, device=device)
-    observed_rpu = torch.tensor(data.observed_rpu, dtype=dtype, device=device)
     observed_log10 = torch.tensor(data.observed_log10, dtype=dtype, device=device)
-    raw_scales_np, log_scales_np = objective_row_scales(data)
-    raw_scales = torch.tensor(raw_scales_np, dtype=dtype, device=device)
+    log_scales_np = objective_row_scales(data)
     log_scales = torch.tensor(log_scales_np, dtype=dtype, device=device)
-    endpoint_indices_np = endpoint_only_lbd_indices(data, layout)
-    endpoint_indices = torch.tensor(endpoint_indices_np, dtype=torch.long, device=device)
     lbd_index = torch.tensor(data.lbd_index, dtype=torch.long, device=device)
     dbd_index = torch.tensor(data.dbd_index, dtype=torch.long, device=device)
     anchor_index = layout.dbd_names.index(ANCHOR_DBD)
@@ -610,30 +582,13 @@ def fit_pytorch(
         Kd1 = Kd1_all[lbd_index]
         KA = KA_all[dbd_index]
         T0_variant = T0_all[dbd_index]
-        B = 1.0 + Kb * inducer
-        D = Kd0 + Kb.square() * Kd1 * inducer.square()
-        S = torch.sqrt(B.square() + 8.0 * ctf_all * D)
-        ctf_eff = D * (2.0 * ctf_all / (S + B)).square()
-        Z = KA * ctf_eff
-        p7 = -torch.expm1(-OPERATOR_NUMBER * torch.log1p(Z))
-        return T0_variant + (TMAX - T0_variant) * p7
+        return cic_response_torch(inducer, ctf_all, Kd0, Kb, Kd1, KA, T0_variant)
 
-    def torch_shape_prior() -> torch.Tensor:
-        if endpoint_indices.numel() == 0 or SHAPE_PRIOR_WEIGHT <= 0.0:
-            return torch.zeros((), dtype=dtype, device=device)
-        log_kd0 = vector[layout.log_Kd0][endpoint_indices]
-        log_kb = vector[layout.log_Kb][endpoint_indices]
-        log_kd1 = vector[layout.log_Kd1][endpoint_indices]
-        log_q = 2.0 * log_kb + log_kd1 - log_kd0
-        standardized = torch.cat(
-            (
-                (log_kb - SHAPE_PRIOR_CENTER_LOG10_KB)
-                / SHAPE_PRIOR_SCALE_LOG10_KB,
-                (log_q - SHAPE_PRIOR_CENTER_LOG10_Q)
-                / SHAPE_PRIOR_SCALE_LOG10_Q,
-            )
-        )
-        return SHAPE_PRIOR_WEIGHT * torch.mean(standardized.square())
+    def torch_objective() -> torch.Tensor:
+        prediction = torch_prediction()
+        if not torch.isfinite(prediction).all() or torch.any(prediction <= 0):
+            raise RuntimeError("PyTorch predictions must be finite and strictly positive")
+        return torch.sum(((torch.log10(prediction) - observed_log10) * log_scales).square())
 
     optimizer = torch.optim.Adam([vector], lr=learning_rate)
     best_loss = float("inf")
@@ -645,14 +600,7 @@ def fit_pytorch(
 
     for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
-        prediction = torch_prediction()
-        predicted_log10 = torch.log10(torch.clamp(prediction, min=1e-300))
-        raw_loss = torch.sum(((prediction - observed_rpu) * raw_scales).square())
-        log_loss = torch.sum(
-            ((predicted_log10 - observed_log10) * log_scales).square()
-        )
-        prior_loss = torch_shape_prior()
-        loss = raw_loss + log_loss + prior_loss
+        loss = torch_objective()
         if not torch.isfinite(loss):
             raise RuntimeError(f"PyTorch loss became non-finite at epoch {epoch}")
         evaluated_vector = vector.detach().clone()
@@ -666,46 +614,50 @@ def fit_pytorch(
         if loss_value < best_loss - 1e-13:
             best_loss = loss_value
             best_vector = evaluated_vector
-            best_epoch = epoch
+            best_epoch = epoch - 1
             stale_epochs = 0
         else:
             stale_epochs += 1
 
         if epoch == 1 or epoch % 5000 == 0:
             trace_row = {
-                "epoch": epoch,
+                "completed_steps": epoch - 1,
                 "objective_total": loss_value,
-                "weighted_macro_raw_1_minus_R2": float(raw_loss.detach().cpu()),
-                "weighted_macro_log10_1_minus_R2": float(log_loss.detach().cpu()),
-                "shape_prior_penalty": float(prior_loss.detach().cpu()),
+                "macro_log10_1_minus_R2": loss_value,
             }
             loss_trace.append(trace_row)
             print(
-                f"[PyTorch/Adam] epoch={epoch} objective={loss_value:.10g} "
-                f"raw={trace_row['weighted_macro_raw_1_minus_R2']:.6g} "
-                f"log={trace_row['weighted_macro_log10_1_minus_R2']:.6g} "
-                f"prior={trace_row['shape_prior_penalty']:.6g}"
+                f"[PyTorch/Adam] epoch={epoch} macro_log10_1_minus_R2={loss_value:.10g}"
             )
         if patience > 0 and stale_epochs >= patience:
             break
 
+    # The last Adam step has not yet been evaluated by the loop. Consider it
+    # explicitly, keeping the objective and its exact parameter vector paired.
+    with torch.no_grad():
+        final_loss = float(torch_objective().cpu())
+        if not np.isfinite(final_loss):
+            raise RuntimeError("PyTorch final loss became non-finite")
+        if final_loss < best_loss:
+            best_loss = final_loss
+            best_vector = vector.detach().clone()
+            best_epoch = epoch
     elapsed = time.perf_counter() - started
     best_vector_numpy = best_vector.cpu().numpy()
     components = objective_components_numpy(
         data,
         layout,
         best_vector_numpy,
-        raw_scales_np,
         log_scales_np,
-        endpoint_indices_np,
     )
     return FitResult(
         backend=TORCH_BACKEND,
         parameter_vector=best_vector_numpy,
-        objective_total=best_loss,
+        objective_total=components["objective_total"],
         elapsed_seconds=elapsed,
-        status="success",
-        message=f"Best epoch {best_epoch}; stopped after epoch {epoch}",
+        status="patience" if patience > 0 and stale_epochs >= patience else "epoch_budget",
+        message=(f"Best parameters after {best_epoch} Adam steps; completed {epoch} steps. "
+                 "Stopping does not certify optimizer convergence."),
         diagnostics={
             "epochs_requested": epochs,
             "epochs_completed": epoch,
@@ -716,9 +668,7 @@ def fit_pytorch(
             "initialization": initialization_label,
             "loss_trace": loss_trace,
             "objective_components": components,
-            "endpoint_only_prior_LBDs": [
-                layout.lbd_names[index] for index in endpoint_indices_np
-            ],
+            "torch_objective_total": best_loss,
         },
     )
 
@@ -730,8 +680,8 @@ def r_squared(observed: np.ndarray, predicted: np.ndarray) -> float:
 
 
 def metric_row(scope: str, observed: np.ndarray, predicted: np.ndarray) -> dict[str, object]:
-    observed_log = np.log10(observed)
-    predicted_log = np.log10(np.clip(predicted, 1e-300, None))
+    observed_log = log10_positive(observed, "Observed RPU")
+    predicted_log = log10_positive(predicted, "Predicted RPU")
     return {
         "scope": scope,
         "n": int(observed.size),
@@ -845,12 +795,12 @@ def build_dense_curve_outputs(
         frame = data.frame.loc[data.csv_index == csv_index]
         grid = make_curve_grid(frame)
         observed_inducer_count = int(frame["inducer"].nunique())
-        lbd_is_prior_regularized = layout.lbd_lookup[mapping.lbd] in endpoint_indices
+        lbd_has_only_endpoints = layout.lbd_lookup[mapping.lbd] in endpoint_indices
         if observed_inducer_count > 2:
             source = "observed_complete_curve"
             identifiability = "direct"
-        elif lbd_is_prior_regularized:
-            source = "weak_prior_endpoint_only"
+        elif lbd_has_only_endpoints:
+            source = "endpoint_only_unregularized"
             identifiability = "limited"
         else:
             source = "shared_complete_curve_LBD"
@@ -924,9 +874,13 @@ def write_result(
     layout: ParameterLayout,
     output_root: Path,
 ) -> dict[str, object]:
-    backend_dir = output_root / result.backend
-    backend_dir.mkdir(parents=True, exist_ok=True)
     parameters = layout.decode_numpy(result.parameter_vector)
+    lower, upper = layout.bounds()
+    if np.any(result.parameter_vector < lower) or np.any(result.parameter_vector > upper):
+        raise ValueError("Saved parameter vector is outside the model bounds")
+    objective_components = objective_components_numpy(data, layout, result.parameter_vector)
+    if not np.isclose(result.objective_total, objective_components["objective_total"], rtol=1e-10, atol=1e-12):
+        raise ValueError("Fit objective does not match the saved parameter vector")
     predicted, terms = predict_rpu_numpy(data, layout, result.parameter_vector)
 
     if not np.all(np.isfinite(predicted)):
@@ -950,9 +904,6 @@ def write_result(
             ),
             "has_complete_induction_curve": [
                 index not in endpoint_indices for index in range(len(layout.lbd_names))
-            ],
-            "weak_shape_prior_applied": [
-                index in endpoint_indices for index in range(len(layout.lbd_names))
             ],
         }
     )
@@ -985,8 +936,8 @@ def write_result(
         "MAE_raw": float(per_csv_metrics["MAE_raw"].mean()),
         "MAE_log10": float(per_csv_metrics["MAE_log10"].mean()),
     }
-    objective_components = objective_components_numpy(data, layout, result.parameter_vector)
-
+    backend_dir = output_root / result.backend
+    backend_dir.mkdir(parents=True, exist_ok=True)
     lbd_table.to_csv(backend_dir / "parameters_lbd.csv", index=False)
     dbd_table.to_csv(backend_dir / "parameters_dbd.csv", index=False)
     prediction_table.to_csv(backend_dir / "predictions.csv", index=False)
@@ -1014,27 +965,11 @@ def write_result(
         "backend": result.backend,
         "status": result.status,
         "message": result.message,
-        "objective": (
-            "0.5 * macro mean per-CSV (1-R2_raw) + 0.5 * macro mean per-CSV "
-            "(1-R2_log10) + weak endpoint-only LBD shape prior"
-        ),
-        "objective_total": result.objective_total,
+        "objective": OBJECTIVE_DESCRIPTION,
+        "objective_total": objective_components["objective_total"],
         "objective_components": objective_components,
-        "raw_R2_weight": RAW_R2_WEIGHT,
-        "log10_R2_weight": LOG_R2_WEIGHT,
-        "CSV_weighting": "equal macro average across 25 CSVs",
-        "shape_prior": {
-            "weight": SHAPE_PRIOR_WEIGHT,
-            "applies_only_to_endpoint_only_LBDs": True,
-            "parameters": ["log10(Kb)", "log10(Q_LBD)"],
-            "center_log10_Kb": SHAPE_PRIOR_CENTER_LOG10_KB,
-            "scale_log10_Kb": SHAPE_PRIOR_SCALE_LOG10_KB,
-            "center_log10_Q": SHAPE_PRIOR_CENTER_LOG10_Q,
-            "scale_log10_Q": SHAPE_PRIOR_SCALE_LOG10_Q,
-            "endpoint_only_LBDs": [
-                layout.lbd_names[index] for index in sorted(endpoint_indices)
-            ],
-        },
+        "CSV_weighting": "equal macro average across included CSVs",
+        "R2_raw_role": "diagnostic only",
         "elapsed_seconds": result.elapsed_seconds,
         "Tmax": TMAX,
         "operator_number": OPERATOR_NUMBER,
@@ -1067,7 +1002,6 @@ def write_comparison(output_root: Path, summaries: Sequence[dict[str, object]]) 
                 "backend": summary["backend"],
                 "objective_total": summary["objective_total"],
                 "data_objective": components["data_objective"],
-                "shape_prior_penalty": components["shape_prior_penalty"],
                 "macro_R2_raw": macro["R2_raw"],
                 "macro_R2_log10": macro["R2_log10"],
                 "global_R2_raw": metrics["R2_raw"],
@@ -1078,7 +1012,7 @@ def write_comparison(output_root: Path, summaries: Sequence[dict[str, object]]) 
             }
         )
     pd.DataFrame(rows).to_csv(
-        output_root / "backend_comparison_hybrid_macro_r2.csv", index=False
+        output_root / "backend_comparison_macro_log10_r2.csv", index=False
     )
 
 
@@ -1093,7 +1027,7 @@ def print_mapping_summary(mappings: Iterable[SensorMapping]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Fit the Main/Supp-aligned seven-operator mammalian CIC model."
+        description="Fit the seven-operator mammalian CIC model by macro per-CSV log10 R2."
     )
     parser.add_argument(
         "--backend",
@@ -1137,13 +1071,7 @@ def main() -> None:
     )
     print(
         f"Fixed: KA_{ANCHOR_DBD}={ANCHOR_KA}, Tmax={TMAX}, "
-        f"operator_number={OPERATOR_NUMBER}; objective=50% macro raw R2 + "
-        f"50% macro log10 R2; shape_prior_weight={SHAPE_PRIOR_WEIGHT}."
-    )
-    endpoint_indices = endpoint_only_lbd_indices(data, layout)
-    print(
-        "Weak shape prior LBDs: "
-        + ", ".join(layout.lbd_names[index] for index in endpoint_indices)
+        f"operator_number={OPERATOR_NUMBER}; objective={OBJECTIVE_DESCRIPTION}."
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)

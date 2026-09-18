@@ -1,6 +1,6 @@
 # Algorithm release checklist
 
-Current scope: algorithm-only draft `0.2.0-draft.1`.
+Current scope: algorithm-only draft `0.2.1-draft.1`.
 
 ## Implemented
 

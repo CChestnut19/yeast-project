@@ -1,10 +1,10 @@
 """Fit the Main/Supp n=7 mammalian CIC model with a per-sensor log-R2 floor.
 
-The model and shared-parameter hierarchy are unchanged. Optimization starts
-from the archived pure-log10 and hybrid solutions, then adaptively increases
-the observation weight of any CSV whose log10-scale R2 is below the requested
-floor. Among feasible candidates, the solution with the lowest global
-unweighted log10(RPU) MSE is selected.
+The model and shared-parameter hierarchy are unchanged. Each archived start
+first minimizes macro mean per-CSV (1 - R2_log10). Adaptive CSV weights then
+seek the explicit R2_log10 >= 0.5 constraint. Log residuals are normalized by
+each CSV's log10 SST and the CSV count. Among feasible candidates, the largest
+macro mean per-CSV R2_log10 is selected. Raw R2 and global log MSE are diagnostics.
 """
 
 from __future__ import annotations
@@ -43,8 +43,9 @@ def per_csv_log_metrics(
     layout: core.ParameterLayout,
     vector: np.ndarray,
 ) -> pd.DataFrame:
+    core.objective_row_scales(data)
     predicted, _ = core.predict_rpu_numpy(data, layout, vector)
-    predicted_log = np.log10(np.clip(predicted, 1e-300, None))
+    predicted_log = core.log10_positive(predicted, "Predicted RPU")
     rows: list[dict[str, object]] = []
     for csv_index, mapping in enumerate(data.mappings):
         mask = data.csv_index == csv_index
@@ -92,7 +93,7 @@ def global_log_mse(
     return float(
         np.mean(
             np.square(
-                np.log10(np.clip(predicted, 1e-300, None)) - data.observed_log10
+                core.log10_positive(predicted, "Predicted RPU") - data.observed_log10
             )
         )
     )
@@ -108,17 +109,25 @@ def fit_one_start(
     if max_nfev < 1:
         raise ValueError("max_nfev must be positive")
     layout.decode_numpy(initial)
-    core.objective_row_scales(data)  # Reject undefined per-sensor R2 before optimizing.
+    log_scales = core.objective_row_scales(data)
     lower, upper = layout.bounds()
     vector = np.clip(np.asarray(initial, dtype=float), lower, upper)
     sensor_weights = np.ones(len(data.mappings), dtype=float)
     trace: list[dict[str, object]] = []
+    evaluated = []
 
     for round_index in range(MAX_REWEIGHT_ROUNDS + 1):
         table = per_csv_log_metrics(data, layout, vector)
         minimum_r2 = float(table["R2_log10"].min())
         mean_r2 = float(table["R2_log10"].mean())
         mse = global_log_mse(data, layout, vector)
+        evaluated.append({
+            "vector": vector.copy(), "table": table,
+            "sensor_weights": sensor_weights.copy(),
+            "feasible": bool(minimum_r2 >= TARGET_R2_LOG10),
+            "minimum_R2_log10": minimum_r2, "mean_R2_log10": mean_r2,
+            "global_MSE_log10": mse,
+        })
         violating = table.loc[
             table["R2_log10"] < TARGET_R2_LOG10 + INTERNAL_TARGET_MARGIN,
             "csv_index",
@@ -128,6 +137,8 @@ def fit_one_start(
                 "start": label,
                 "round": round_index,
                 "global_MSE_log10": mse,
+                "objective_total": float(table["normalized_SSE_log10"].mean()),
+                "weighted_search_objective": float(np.mean(sensor_weights * table["normalized_SSE_log10"])),
                 "minimum_per_sensor_R2_log10": minimum_r2,
                 "mean_per_sensor_R2_log10": mean_r2,
                 "violating_sensor_count_at_internal_margin": len(violating),
@@ -142,12 +153,14 @@ def fit_one_start(
             f"mean_R2_log10={mean_r2:.8f} log10_MSE={mse:.8g} "
             f"violating={len(violating)}"
         )
-        if not violating:
-            return vector, table, trace, sensor_weights
+        if not violating and round_index > 0:
+            break
         if round_index == MAX_REWEIGHT_ROUNDS:
             break
 
-        for index in violating:
+        # The first fit always uses the pure macro-log10-R2 objective, even
+        # when the archived initial vector already satisfies the constraint.
+        for index in (violating if round_index > 0 else []):
             deficit = max(
                 0.0,
                 TARGET_R2_LOG10 + INTERNAL_TARGET_MARGIN
@@ -157,12 +170,12 @@ def fit_one_start(
             # the pure-log solution when only a small correction is required.
             sensor_weights[index] *= WEIGHT_GROWTH ** (1.0 + 4.0 * deficit)
 
-        row_scale = np.sqrt(sensor_weights[data.csv_index])
+        row_scale = log_scales * np.sqrt(sensor_weights[data.csv_index])
 
         def residuals(parameters: np.ndarray) -> np.ndarray:
             predicted, _ = core.predict_rpu_numpy(data, layout, parameters)
             log_residual = (
-                np.log10(np.clip(predicted, 1e-300, None)) - data.observed_log10
+                core.log10_positive(predicted, "Predicted RPU") - data.observed_log10
             )
             return log_residual * row_scale
 
@@ -179,7 +192,8 @@ def fit_one_start(
         )
         vector = fit.x
 
-    return vector, per_csv_log_metrics(data, layout, vector), trace, sensor_weights
+    selected = choose_candidate(evaluated)
+    return selected["vector"], selected["table"], trace, selected["sensor_weights"]
 
 
 def choose_candidate(candidates: list[dict[str, object]]) -> dict[str, object]:
@@ -188,15 +202,18 @@ def choose_candidate(candidates: list[dict[str, object]]) -> dict[str, object]:
     if any(not np.isfinite(float(candidate[key])) for candidate in candidates
            for key in ("global_MSE_log10", "minimum_R2_log10", "mean_R2_log10")):
         raise ValueError("Fit candidate metrics must be finite")
+    if any(bool(candidate["feasible"]) != (float(candidate["minimum_R2_log10"]) >= TARGET_R2_LOG10)
+           for candidate in candidates):
+        raise ValueError("Fit candidate feasibility disagrees with the per-sensor R2 floor")
     feasible = [candidate for candidate in candidates if bool(candidate["feasible"])]
     if feasible:
-        return min(feasible, key=lambda candidate: float(candidate["global_MSE_log10"]))
+        return max(feasible, key=lambda candidate: (float(candidate["mean_R2_log10"]),
+                                                     float(candidate["minimum_R2_log10"])))
     return max(
         candidates,
         key=lambda candidate: (
             float(candidate["minimum_R2_log10"]),
             float(candidate["mean_R2_log10"]),
-            -float(candidate["global_MSE_log10"]),
         ),
     )
 
@@ -210,9 +227,26 @@ def write_outputs(
     output_root: Path,
     elapsed: float,
 ) -> Path:
+    # Recompute the candidate claims from their vectors before creating files.
+    # A caller cannot promote an infeasible vector by changing a metadata flag.
+    if not any(candidate is selected for candidate in candidates):
+        raise ValueError("Selected candidate is absent from the candidate list")
+    for candidate in candidates:
+        checked = per_csv_log_metrics(data, layout, np.asarray(candidate["vector"], dtype=float))
+        expected = {"minimum_R2_log10": float(checked["R2_log10"].min()),
+                    "mean_R2_log10": float(checked["R2_log10"].mean()),
+                    "global_MSE_log10": global_log_mse(data, layout, candidate["vector"])}
+        if (bool(candidate["feasible"]) != bool(checked["passes_R2_log10_floor"].all())
+                or any(not np.isclose(float(candidate[key]), value, rtol=1e-10, atol=1e-12)
+                       for key, value in expected.items())):
+            raise ValueError("Fit candidate metadata disagrees with recomputed objective or constraints")
+    if choose_candidate(candidates) is not selected:
+        raise ValueError("Selected candidate does not maximize feasible macro log10 R2")
     vector = np.asarray(selected["vector"], dtype=float)
     metrics = per_csv_log_metrics(data, layout, vector)
     weights = np.asarray(selected["sensor_weights"], dtype=float)
+    if weights.shape != (len(data.mappings),) or not np.isfinite(weights).all() or np.any(weights <= 0):
+        raise ValueError("Fit candidate sensor weights must be finite and positive")
     metrics["final_observation_weight_multiplier"] = weights[
         metrics["csv_index"].to_numpy(int)
     ]
@@ -220,11 +254,11 @@ def write_outputs(
     result = core.FitResult(
         backend=BACKEND,
         parameter_vector=vector,
-        objective_total=float(selected["global_MSE_log10"]),
+        objective_total=float(metrics["normalized_SSE_log10"].mean()),
         elapsed_seconds=elapsed,
         status="success" if bool(selected["feasible"]) else "best_infeasible",
         message=(
-            "All 25 sensors satisfy log10-scale R2 >= 0.5"
+            "All included sensors satisfy log10-scale R2 >= 0.5"
             if bool(selected["feasible"])
             else "No feasible solution found; saved best minimum-R2 candidate"
         ),
@@ -234,9 +268,11 @@ def write_outputs(
             "internal_target_margin": INTERNAL_TARGET_MARGIN,
             "reweight_growth": WEIGHT_GROWTH,
             "maximum_reweight_rounds": MAX_REWEIGHT_ROUNDS,
+            "search_objective": "macro mean sensor_weight * (1 - R2_log10); adaptive feasibility search",
+            "selection_objective": "maximum unweighted macro mean per-CSV R2_log10 among feasible candidates",
         },
     )
-    core.write_result(result, data, layout, output_root)
+    summary = core.write_result(result, data, layout, output_root)
     backend_dir = output_root / BACKEND
 
     metrics.to_csv(backend_dir / "constraint_metrics.csv", index=False)
@@ -249,6 +285,7 @@ def write_outputs(
                 "feasible": candidate["feasible"],
                 "minimum_R2_log10": candidate["minimum_R2_log10"],
                 "mean_R2_log10": candidate["mean_R2_log10"],
+                "objective_total": 1.0 - float(candidate["mean_R2_log10"]),
                 "global_MSE_log10": candidate["global_MSE_log10"],
                 "selected": candidate is selected,
             }
@@ -257,11 +294,7 @@ def write_outputs(
         backend_dir / "candidate_comparison.csv", index=False
     )
 
-    parameter_lbd = pd.read_csv(backend_dir / "parameters_lbd.csv")
-    parameter_lbd["weak_shape_prior_applied"] = False
-    parameter_lbd.to_csv(backend_dir / "parameters_lbd.csv", index=False)
-
-    objective = {
+    constraint = {
         "global_unweighted_MSE_log10": float(selected["global_MSE_log10"]),
         "minimum_per_sensor_R2_log10": float(metrics["R2_log10"].min()),
         "mean_per_sensor_R2_log10": float(metrics["R2_log10"].mean()),
@@ -270,43 +303,27 @@ def write_outputs(
         "included_sensor_count": len(metrics),
         "constraint_satisfied": bool(metrics["passes_R2_log10_floor"].all()),
     }
+    objective = {**summary["objective_components"], **constraint}
     pd.DataFrame([objective]).to_csv(
         backend_dir / "objective_components.csv", index=False
     )
 
-    summary = {
-        "backend": BACKEND,
-        "status": result.status,
-        "message": result.message,
-        "objective": (
-            "lexicographic: require every included CSV log10-scale R2 >= 0.5; "
-            "among feasible adaptive-reweighted candidates select the lowest "
-            "global unweighted mean squared error in log10(RPU)"
+    summary.update({
+        "objective_components": objective,
+        "constraint": constraint,
+        "selection_rule": (
+            "require every included CSV R2_log10 >= 0.5; maximize macro mean "
+            "per-CSV R2_log10 among feasible candidates; if none is feasible, "
+            "save the largest minimum per-CSV R2_log10 for diagnostics and exit 2"
         ),
-        "constraint": objective,
         "selected_start": selected["label"],
-        "elapsed_seconds": elapsed,
-        "Tmax": core.TMAX,
-        "operator_number": core.OPERATOR_NUMBER,
-        "anchor_DBD": core.ANCHOR_DBD,
-        "anchor_KA": core.ANCHOR_KA,
-        "included_CSV_count": len(data.mappings),
-        "excluded_CSV": sorted(core.EXCLUDED_CSV),
-        "LBD_parameter_groups": len(layout.lbd_names),
-        "DBD_parameter_groups": len(layout.dbd_names),
-        "free_parameter_count": layout.size,
         "parameter_hierarchy": {
             "same_LBD_shares": ["Kd0", "Kb", "Kd1"],
             "same_DBD_shares": ["KA", "T0_variant"],
         },
-        "shape_prior": {
-            "weight": 0.0,
-            "reason": "disabled so the explicit per-sensor R2 floor is the governing constraint",
-        },
-        "diagnostics": result.diagnostics,
-    }
+    })
     (backend_dir / "fit_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(summary, ensure_ascii=False, indent=2, default=float) + "\n", encoding="utf-8"
     )
     return backend_dir
 
@@ -381,6 +398,8 @@ def main() -> None:
                 "selected_start": selected["label"],
                 "constraint_satisfied": selected["feasible"],
                 "minimum_R2_log10": selected["minimum_R2_log10"],
+                "mean_R2_log10": selected["mean_R2_log10"],
+                "objective_total": 1.0 - float(selected["mean_R2_log10"]),
                 "global_MSE_log10": selected["global_MSE_log10"],
                 "elapsed_seconds": elapsed,
             },

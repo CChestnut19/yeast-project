@@ -60,7 +60,7 @@ previous_audit/
 - Each R² observation is the arithmetic mean of unstarred replicates sharing the same panel, batch/Run/Day, actual TF input and inducer concentration. Different batches are not pooled when calculating R².
 - Plot summaries separately group batches with similar actual TF inputs. Each nonzero member must be within 30% of the group mean. This grouping does not change the observation unit used for R².
 - The original primary metric is **raw-scale R²**. `batch_conditional_log10` separately reports **log10 R²**. Both use `1-SSE/SST`; Pearson r² is a diagnostic only.
-- The original sensitivity analyses are retained: `Tmax=35`, a uniform `T0=0.035`, exclusion of green values, individual-replicate analysis and literal S83. Log10 metrics record the number of omitted nonpositive or nonfinite values.
+- Sensitivity analyses retain `Tmax=35`, a uniform `T0=0.035`, exclusion of green values and individual-replicate analysis. The inconsistent literal S83 alternative was removed; all response calculations use the S32-S47 mass balance and S11 output equation. Log10 diagnostics record omitted nonpositive or nonfinite values; parameter fitting separately rejects such inputs.
 
 ## Outputs and validation scope
 

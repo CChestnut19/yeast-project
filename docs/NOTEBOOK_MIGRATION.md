@@ -4,14 +4,20 @@ Source: repository commit `bfd2de5`, ten root notebooks, **59 code cells**.
 Cell numbers below are the original zero-based notebook indices, including
 markdown cells. `yeast/notebook_parameters.json` records every code cell's
 SHA-256 and its literal scientific parameters, with separate source-cell keys.
+The initial migration at `037e500` preserved historical equations. The current
+revision applies the author's formula-consistency and log10-R² corrections;
+see [the current model and fitting specification](MODEL_AND_FITTING.md).
+Source hashes and constants remain provenance, not a claim that corrected
+algorithms reproduce the inconsistent source expressions.
+
 This migration removes notebook execution, plots, colors, figure geometry,
 personal filesystem paths and automatic CSV writes. Functions return numerical
 arrays, records or tables; callers can write those results to CSV/JSON.
 
 ## Shared interfaces and model conventions
 
-- `yeast.binding.active_dimer_pool` remains the single ordinary homodimer
-  mass-balance implementation. `yeast.analysis.response` and `response_pair`
+- `yeast.binding.cic_dimer_pool` supplies the canonical ordinary/nuclear
+  coefficients and calls the shared stable `active_dimer_pool` solver. `yeast.analysis.response` and `response_pair`
   now serve ordinary and nuclear historical dose-response calculations.
 - Historical `Imax` is an **amplitude**: ceiling = `I0 + Imax`. The existing
   activator model uses a **total** `Tmax`: amplitude = `Tmax - T0`. They coincide
@@ -23,14 +29,14 @@ arrays, records or tables; callers can write those results to CSV/JSON.
   grid maxima and tied Pareto points. Undefined log objectives are excluded
   explicitly; a pair without any valid objective produces no result record.
 - `yeast.exploratory_models` holds distinct reduced, heterodimer,
-  allosteric, operator and hybrid models. Functions ending in `literal` retain
-  suspicious source equations instead of substituting a different model.
+  allosteric, operator and hybrid models. Same-model historical inconsistencies have been corrected or removed;
+  comparison models retain explicitly distinct physical assumptions.
 - `yeast.curve_analysis` handles slopes, historical quality measures, alignment
   and regression. It reuses the existing activator R²/Pearson implementations.
   `yeast.fitting` handles estimation/fitting and `yeast.optimization` the GP work.
 
 Use `load_notebook_parameters('ec50.ipynb', 3)` to select one parameter version.
-The result separates `parameters`, optional `grids`, `fit` and `alignment`
+The result separates `parameters`, optional `grids`, `historical_fit` and `alignment`
 recipes. `foldchange_design_parameters(cell=1|2|3)` converts that notebook's
 receptor/DBD tables to `scan_designs` input. No parameter sets are merged by
 sensor name: the same name has different coefficients and doses in different
@@ -67,7 +73,7 @@ by the named shared interface, rather than copied into another module.
 | 7 | Cell 2 reduced activator ratio on a TF/kd grid; no new response implementation. |
 | 8 | Cell 2 reduced repressor off/on ratio on a TF/kd grid. |
 | 9 | `two_state_repression`; x1=(1+I/active_dissociation)², x2=(1+I/inactive_dissociation)², active weight x1/(x1+10*x2). Source passes the value named k2 as active_dissociation and k1 as inactive_dissociation. Imax/I0 are unused. |
-| 10 | `fixed_induced_root_fold_literal`: induced square root uses TF=1 while its outside factor uses varying L. Actual baseline .001 overrides unused I0. |
+| 10 | Induced/basal fold now uses `analysis.response_pair` at the same supplied L in both states. Removed the inconsistent fixed-TF root helper; the source equation remains in Git history. |
 | 11 | `rob_phillips_allosteric_dimer_fixed_inducer`; compute expression/no-TF expression for fold. Retains source's product R*DBD, interaction and fixed allosteric factor. |
 | 12 | `simple_repression_partition_function`, `simple_repression_pbound`, `simple_repression_foldchange`; retain effective R=R*DBD/(1+DBD). State contributions are 1/Z, RNAP/Z, TF/Z. |
 
@@ -80,8 +86,8 @@ search**. Its distinct computations are quality ratios and fold ranges.
 | --- | --- |
 | 0 | `saturated_fold_approximation`; other computed response curves reuse `dimer_response`. The source `np.arange(.000109651,.387876109)` has default step 1 and contains only one k1, recorded in grid metadata. |
 | 1 | Same approximate fold with separately preserved acVHH/RpaR coefficients; ordinary multiplication gives the L*k1 coordinate. |
-| 2 | `log_fold_range_literal`; nuclear root/ratio mismatch retained. Uses explicit I, because original loop ignores sensor_I and inherits I=10 from earlier cells. All parameter tables retained separately. |
-| 3 | `quality_ratio`, optionally multiplied by kx2²/kx1² for names present in both nuclear tables. Yeast-era parameter set retained. |
+| 2 | `log_fold_range` uses the complete canonical response_pair, including the nuclear linear/dimer terms, explicit I and optional Imax/I0. Removed the subtract-1 mismatch and fabricated NaN/Inf sentinel fold values. |
+| 3 | `quality_ratio` reports the inducer-dependent dimer coefficient contribution relative to basal; nuclear multiplier corrected to (1+kx2²)/(1+kx1²). Source parameters remain separate. |
 | 4 | Same ratio interface with a different historical mammalian parameter set and inducer doses. |
 | 5 | Exact numerical duplicate of cell 4; reuse same interface. Parameters retain a distinct source pointer; tick formatting removed. |
 
@@ -113,24 +119,24 @@ search**. Its distinct computations are quality ratios and fold ranges.
 
 | Cell | Retained computation / disposition |
 | --- | --- |
-| 1 | `estimate_shared_parameters`: group-mean k1 heuristic by LBD, rowwise `estimate_kd` then mean by DBD, `estimate_M_literal` then mean by LBD, merge onto observation table. Explicit amplitude=2.5 and total_tf=1 defaults. `calc_f` is the shared basal dimer pool after substituting its root. |
+| 1 | `estimate_kd` and `estimate_M` exactly invert canonical mass balance. `estimate_shared_parameters` requires explicit fixed LBD k1/k2 and groups inversions as initialization; removed the unsupported k1 heuristic and incomplete M inversion. |
 
 ### parameters_fitting.ipynb — 6 cells
 
 | Cell | Retained computation / disposition |
 | --- | --- |
-| 0 | `fit_notebook_curve_fit(cell=0)`: raw objective, original k1<10 and positive-k penalty, original bounded fit, unbounded fallback on exception. Caller supplies fixed kd/I0/amplitude. |
-| 1 | `fit_notebook_curve_fit(cell=1)`: five-parameter nuclear model, raw objective, positive-value penalty, unbounded curve_fit. |
-| 2 | `fit_notebook_curve_fit(cell=2)`: bounded three-shared-parameter log10 objective; fixed per-observation kd is explicit. Historical indices 0→10.56826129, 1→9.152591138, later→2.09409 retained as metadata. No unknown glob order is reconstructed. |
-| 3 | `epsilon_response_literal` and optional `fit_shared_then_kd_adam(variant='torch_epsilon_literal')`; raw MSE, ordinary three-shared-parameter stage at kd=10, followed by warm-started per-dataset kd stages. SciPy `fit_shared_then_kd` is an additional alternative, not a claim of Adam equivalence. |
-| 4 | Same optional Adam scheduler with `variant='nuclear_clamped'`; five shared parameters, absolute values and kx2 floor .001. Original float32, learning rate .001, 100,000 shared steps, 150,000 kd steps and gradient clip 5 are configurable defaults. |
+| 0 | `fit_notebook_curve_fit(cell=0)` retains source initialization/bounds where valid and minimizes normalized log10 residuals. Raw objective, discontinuous penalties and invalid-domain unbounded fallback are superseded. |
+| 1 | `fit_notebook_curve_fit(cell=1)` fits the five canonical nuclear parameters with nonnegative bounds and the same log10 R² objective. |
+| 2 | `fit_notebook_curve_fit(cell=2)` fits three shared parameters, explicit per-observation kd and optional dataset groups; each group is normalized by its own log10 SST. Source glob-order constants are provenance only. |
+| 3 | `fit_shared_then_kd` and optional `fit_shared_then_kd_adam` fit the canonical response, first shared parameters at fixed kd then per-dataset kd; all stages optimize log10 R². Removed the asymmetric epsilon equation and raw MSE. |
+| 4 | Same two-stage APIs with explicit kx1/kx2. The nuclear model matches analysis.response; no extra kx2 floor or absolute-value model variant. Optional Adam uses positive parametrization and float64; only selected gradients are optimized. |
 | 5 | `regression_diagnostics(scale='log10', direction='observed_to_predicted')`; positive paired mask, log Pearson r², line coefficients and raw predictive R². |
 
 ### plot4.ipynb — 11 cells
 
 | Cell | Retained computation / disposition |
 | --- | --- |
-| 1 | `quadratic_activation_literal` retains the printed ((I*k2)²+k3)/(1+(I*k2)²+k3). Original I is used before assignment and k1 is undefined; unused x2 discarded. Interface requires I explicitly. |
+| 1 | Removed the disconnected quadratic scratch expression and undefined-variable fragments; use analysis.response for a CIC response with explicit TF and model parameters. |
 | 6 | Nuclear `response` with the cell's MR coefficients. |
 | 7 | Ordinary `response`, shared raw/log10 R² calculations. Historical mammalian amplitude convention retained. |
 | 8 | Nuclear `response` with distinct ER/DHB crosstalk coefficients; shared raw R². |
@@ -154,7 +160,7 @@ search**. Its distinct computations are quality ratios and fold ranges.
 | 8 | `regression_diagnostics(scale='raw', direction='predicted_to_observed')`; retains Pearson r² and line fit on supplied prediction/observation columns. |
 | 9 | `response` + `align_curve`: induced offset=-I0[i], basal offset=.027-2*I0[i]; `grouped_statistics` of **source_residual**=source(x)-raw observation. Source/master baseline=.01 and master kd=6.216347694. |
 | 10 | Same corrections, `prediction_policy='clamp'` retains np.interp master-prediction boundary behavior while correction extrapolates. `alignment_statistics` supplies pooled raw R² by dose. Numerical output arrays retained; RGB/hex export removed. |
-| 12 | `mismatched_tf_crosstalk_literal`: second square root uses m2 (labelled kd) as TF, while outer factor is m1. Parameters remain distinct. Undefined scatter x_subset/y_subset removed. |
+| 12 | `crosstalk_ratio` now evaluates two canonical responses with the same supplied L. Removed the substitution of kd for TF and undefined scatter variables. |
 | 13 | Two calls to nuclear `response`, separate k3/kx2/dose values; return second/first for crosstalk. Personal CSV scatter selection is not a model input. |
 
 ### plot7.ipynb — 3 cells
@@ -162,57 +168,41 @@ search**. Its distinct computations are quality ratios and fold ranges.
 | Cell | Retained computation / disposition |
 | --- | --- |
 | 0 | `regression_diagnostics(scale='log10', direction='observed_to_predicted')`; retains positive mask, log-space regression, raw R² and in-sample fitted R². The fitted quantity depends on observed values and is labelled accordingly. |
-| 1 | `hybrid_promoter` with varying TF concentrations, fixed inducer doses=10. Preserve amplitude pair 35.84931505/.85546578 and baseline .006969286. Source axis labels say inducer although actual variables are TF. |
-| 2 | Same hybrid interface with fixed TF=10, varying inducer doses, amplitude pair 35.84931505/.687512595 and baseline .015930056; shared raw R². Unused I02 does not contribute. |
+| 1 | `hybrid_promoter` now uses the Note 11 total-ceiling convention and p_activator*p_unbound**operators (default 2). Source amplitude constants remain archived; callers explicitly supply tmax/baseline/operator count. |
+| 2 | Same corrected hybrid interface, with fixed TF and varying inducer doses; shared diagnostic R². Multiplication of two historical amplitudes is no longer the output rule. |
 
-## Known scientific and execution limits
+## Current scope and limits
 
-1. Stable rationalized mass-balance expressions replace subtractive cancellation.
-   Zero-TF baseline is defined exactly; the original logarithmic forms emitted
-   NaNs at zero. Existing finite-domain equations agree within floating-point
-   tolerance. The steep-interval function returns NaNs if no positive interval
-   exists instead of indexing an empty result.
-2. `box` heterodimer states deliberately share A*B. Its unused C/D equations
-   contain k2² where a basal k1² might be expected, but do not affect any output.
-   The fixed-root, mismatched-TF and nuclear subtract-1 variants are explicitly
-   retained as literal models; they are not silently “corrected.”
-3. The grouped estimate's k1 heuristic and `estimate_M_literal` are preserved
-   even though the latter is not the inverse of the complete inducer model.
-   Singular/nonphysical inputs now raise an error instead of generating invalid
-   downstream parameters. These are historical estimates, not fit guarantees.
-4. Historical SciPy fit defaults retain original penalties and fallback. The
-   optional Adam backend preserves selected-optimizer zero_grad and clipping
-   **all** parameters, including accumulating gradients on parameters outside
-   that optimizer. This is a source quirk with numerical consequences. Algebraic
-   regrouping can change float32 rounding; bitwise optimizer trajectories are
-   not claimed. The separate least_squares interface uses positive bounds and
-   explicitly reports convergence; it is an additional supported workflow.
-5. No original private CSVs used by these root notebooks are included in the
-   repository's two public CSV inputs. The activator workbook workflow and
-   public Note 10/11 tables have their own established pipelines. Their values
-   are not substituted for missing notebook CSVs. Historical original-data
-   fits, GP optima and corrected experimental R² therefore cannot be rerun here.
-   Missing measurements are not synthesized.
-6. Array APIs require paired rows; they reject missing values rather than
-   repeating independent dropna calls that can mismatch L, dose and response.
-   GP random sampling accepts an explicit seed; source runs had none, so old
-   candidate rows cannot be reconstructed bit-for-bit. GPs retain their original
-   standardization, kernels, alpha, ranking and standard-deviation filters.
-7. No concentration-unit conversion is inferred. Supply each API's inputs in
-   the units associated with its selected source parameters; historical cells
-   do not establish a single shared unit convention.
+1. Same-model response, folds, crosstalk and fitting use the canonical mass
+   balance described in [MODEL_AND_FITTING.md](MODEL_AND_FITTING.md). Historical
+   Imax is still an amplitude and must be converted explicitly to total Tmax.
+2. All CIC parameter optimizers maximize log10 R². Shared fits equally weight
+   each dataset using its own log10 SST. Raw R², Pearson r² and calibration
+   regressions remain diagnostic calculations, not fitting objectives.
+3. Heterodimer, monomer, reduced limiting and allosteric comparison functions
+   have different assumptions. They are not interchangeable CIC fit backends.
+4. Source parameter constants and cell hashes are preserved independently.
+   `historical_fit` describes an old source recipe, not current optimizer
+   settings. Old fitted coefficients must be refitted before claiming that
+   they optimize the corrected objective.
+5. The original notebooks' private CSVs are missing. The included Note 10/11
+   tables are not substituted for those inputs. Original-data fits, GP optima
+   and historical corrected experimental R² cannot be reproduced here.
+6. Array APIs require finite paired rows. Fitting additionally requires
+   strictly positive, nonconstant responses per group; invalid observations
+   are rejected. No concentration-unit conversion is inferred by array APIs.
+7. The optional Adam backend uses canonical float64 equations and positive
+   parameters. Historical epsilon, abs/clamp and accumulating-gradient quirks
+   are superseded; historical optimizer trajectories are not reproduced.
 
 ## Validation
 
-`python -m unittest discover -s tests -p test_notebook_algorithms.py -v` verifies original finite
-response equations (including distinct literal variants), model ceiling
-conversion, conservation, operator inversion/unreachable targets, source grid
-maxima/Pareto ties, quality ratios, alignment residuals/offsets/boundaries,
-grouped statistics, calibration direction, parameter-set separation, grouped
-estimation, raw/log fits from displaced initial values, original curve_fit
-penalties/fallback, two-stage fits and small GP selection/slices.
+```text
+python -m unittest discover -s tests -v
+```
 
-On 2026-09-18, the minimal NumPy/Pandas/SciPy/scikit-learn environment passed
-**18 tests**, with the optional Torch test skipped. The existing Torch environment
-separately passed both historical forward variants and a two-step shared plus
-two-step per-dataset Adam smoke test. No plotting package is required.
+Tests compare canonical equations across modules, source parameter separation,
+operator rules, fitting objectives on biased data, group weighting, invalid
+inputs, exact inversions and optional NumPy/Torch parity. The source-cell
+inventory still covers all 59 original code cells. Current measured results
+and data limitations are in [VALIDATION.md](../submission/VALIDATION.md).

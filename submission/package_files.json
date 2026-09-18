@@ -1,6 +1,7 @@
 {
   "files": [
     "README.md",
+    "docs/MODEL_AND_FITTING.md",
     "docs/NOTEBOOK_MIGRATION.md",
     "mammalian/Input/README.md",
     "mammalian/README.md",
@@ -28,6 +29,9 @@
     "tests/fixtures/repressor_reference.json",
     "tests/test_activator.py",
     "tests/test_algorithms_only.py",
+    "tests/test_formula_consistency.py",
+    "tests/test_logr2_fitting.py",
+    "tests/test_mammalian_logr2.py",
     "tests/test_notebook_algorithms.py",
     "tests/test_regressions.py",
     "tests/test_repressor_integration.py",

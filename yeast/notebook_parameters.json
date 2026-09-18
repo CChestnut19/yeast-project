@@ -1,5 +1,5 @@
 {
-  "description": "Literal scientific parameter values by notebook and zero-based cell index. Versions remain separate; these are historical exploratory values, not substitutions for production model parameters. Personal paths and plotting metadata excluded.",
+  "description": "Original notebook scientific constants and source code hashes. Historical fitting recipes are provenance only; current formulas and fitting objective follow docs/MODEL_AND_FITTING.md and maximize log10 R-squared.",
   "source_commit": "bfd2de5",
   "cells": {
     "box.ipynb:0": {
@@ -1596,7 +1596,7 @@
           ]
         ]
       },
-      "fit": {
+      "historical_fit": {
         "initial": {
           "k1": 0.1,
           "k2": 0.1,
@@ -1613,7 +1613,7 @@
         "Imax": 13.60910816,
         "kd": 9.152591138
       },
-      "fit": {
+      "historical_fit": {
         "initial": {
           "k1": 0.001,
           "k2": 1,
@@ -1650,7 +1650,7 @@
         "1": 9.152591138,
         "2_and_later": 2.09409
       },
-      "fit": {
+      "historical_fit": {
         "scale": "log10",
         "file_order_warning": "Original glob order was unspecified. Pass explicit per-observation kd in the migrated interface."
       }
@@ -1658,7 +1658,7 @@
     "parameters_fitting.ipynb:3": {
       "code_sha256": "e1328cb46db96d9a3410d1be53f390126ee0b29b1abeb208f495200d846651a0",
       "parameters": {},
-      "fit": {
+      "historical_fit": {
         "initial_shared": {
           "k1": 0.001,
           "k2": 0.02735345,
@@ -1675,7 +1675,7 @@
     "parameters_fitting.ipynb:4": {
       "code_sha256": "8a99554caa31cad9c70e2780b8ec7d30c2ef1322c6cb87207efa6e386adea32a",
       "parameters": {},
-      "fit": {
+      "historical_fit": {
         "initial_shared": {
           "k1": 0.00074823520789,
           "k2": 0.456403423356008,

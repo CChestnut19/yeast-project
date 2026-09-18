@@ -18,3 +18,5 @@ Additional historical algorithms and preserved parameter variants are documented
 Activator uses total ceiling `Tmax=35.85`. Historical responses use amplitude `Imax`, with total ceiling `I0+Imax`. Note 10 uses sensor-specific total ceilings and `1-(1-p_unbound)^2`; Note 11 uses `Tmax=35.85` and `p_activator*p_unbound^2`. Sharing mass balance does not make these response equations interchangeable.
 
 All entry points produce numerical outputs only. Existing source fields such as activator `plot_type` and the Note 11 filename `Supplementary_Note_11_plot_data.csv` retain their original data-schema/provenance names; they do not invoke rendering.
+
+All parameter-fitting entry points optimize log10 R². The [formula and fitting specification](../docs/MODEL_AND_FITTING.md) explains shared mass balance, output-window conversion, equal dataset weights and corrections to inconsistent historical expressions.
