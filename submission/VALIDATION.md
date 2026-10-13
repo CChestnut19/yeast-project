@@ -42,4 +42,4 @@ Original activator workbook/parameter inputs, mammalian input tables/mapping/ini
 
 The current [model and objective specification](../docs/MODEL_AND_FITTING.md) supersedes historical raw/mixed fit recipes. Old fitted coefficients have not been relabeled as optimal for the new objective. Mammalian Adam reports its stopping reason; a finite run at an epoch/patience limit does not certify convergence.
 
-License, software authors, manuscript mapping and final release metadata still require author confirmation. This is a computationally checked draft, not a statement of journal acceptance.
+The software license was confirmed as MIT on 2026-10-13. Software authors, manuscript mapping and final release metadata still require author confirmation. This is a computationally checked draft, not a statement of journal acceptance.

@@ -17,9 +17,10 @@ Completed execution evidence is in [VALIDATION.md](VALIDATION.md). Configuration
 - [ ] Confirm manuscript/software title, contributors and exact journal.
 - [ ] Confirm [analysis mapping](ANALYSIS_MAP.md), including which historical algorithms support manuscript claims.
 - [ ] Supply [missing experimental inputs](DATA_REQUIREMENTS.md) or verified access arrangements.
-- [ ] Approve the software license and data terms.
+- [x] Approve the software license: MIT (author-confirmed on 2026-10-13).
+- [ ] Confirm data distribution terms.
 - [ ] Complete citation and Code/Data availability statements.
 - [ ] Verify every claimed numerical result against final inputs.
 - [ ] Freeze an approved commit/version and deposit an immutable archive; record its actual persistent identifier if issued.
 
-No final license, DOI or complete-manuscript validation is asserted. Rendering is outside this repository version's scope.
+No archival DOI or complete-manuscript validation is asserted. Rendering is outside this repository version's scope.

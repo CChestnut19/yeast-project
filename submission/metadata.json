@@ -9,9 +9,11 @@
   "authors": [],
   "doi": null,
   "license": {
-    "status": "pending_author_confirmation",
-    "spdx_identifier": null,
-    "author_decision": "Prepare an unlicensed draft; license choice is not yet confirmed."
+    "status": "author_confirmed",
+    "spdx_identifier": "MIT",
+    "license_file": "LICENSE",
+    "copyright_holder": "yeast-project contributors",
+    "author_decision": "Use the MIT License, as confirmed by the author on 2026-10-13."
   },
   "data_scope": {
     "note10": "Supplied experimental table: 1141 replicate measurements",
@@ -23,7 +25,7 @@
   "release_blockers": [
     "Confirm exact journal and manuscript-to-analysis mapping",
     "Confirm manuscript title, software authors and citation metadata",
-    "Select software license and confirm permissions for supplied data",
+    "Confirm permissions for supplied data",
     "Supply missing experimental inputs and verify all claimed manuscript results",
     "Approve a final immutable release and archival DOI or other persistent identifier"
   ],

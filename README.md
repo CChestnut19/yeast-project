@@ -54,4 +54,4 @@ All CIC parameter fitters maximize **R² of log10-transformed responses**. Share
 - [Yeast algorithms](yeast/README.md) and [mammalian algorithms](mammalian/README.md)
 - [Release checklist](submission/RELEASE_CHECKLIST.md), [Code availability draft](submission/CODE_AVAILABILITY.md), [citation](submission/CITATION_GUIDANCE.md), [license status](submission/LICENSE_STATUS.md)
 
-The license, software authors, final manuscript mapping and missing-data arrangements remain pending author confirmation. This draft does not claim complete manuscript reproduction or journal acceptance.
+The source code is licensed under the [MIT License](LICENSE). Software authors, final manuscript mapping and missing-data arrangements remain pending author confirmation. This draft does not claim complete manuscript reproduction or journal acceptance.

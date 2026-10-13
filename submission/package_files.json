@@ -1,5 +1,6 @@
 {
   "files": [
+    "LICENSE",
     "README.md",
     "docs/MODEL_AND_FITTING.md",
     "docs/NOTEBOOK_MIGRATION.md",
