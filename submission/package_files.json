@@ -2,6 +2,9 @@
   "files": [
     "LICENSE",
     "README.md",
+    "data/README.md",
+    "data/Source data.xlsx",
+    "data/source_data_manifest.json",
     "docs/MODEL_AND_FITTING.md",
     "docs/NOTEBOOK_MIGRATION.md",
     "mammalian/Input/README.md",

@@ -38,7 +38,7 @@ The GitHub Actions workflow also runs installation, the complete suite, demo and
 
 ## Limits
 
-Original activator workbook/parameter inputs, mammalian input tables/mapping/initial vectors and the former notebooks' private CSVs are missing. Full experimental fitting, historical GP results, long Adam runs and complete manuscript reproduction were **not** performed. See [DATA_REQUIREMENTS.md](DATA_REQUIREMENTS.md). The demo marks missing experimental workflows as `not_run`; synthetic tests are not experimental evidence.
+The author-supplied source workbook is now included. Activator parameter TSV, mammalian numerical CSVs/mapping/initial vectors and the former notebooks' private CSVs remain missing. Full experimental fitting, historical GP results, long Adam runs and complete manuscript reproduction were **not** performed. See [DATA_REQUIREMENTS.md](DATA_REQUIREMENTS.md). The demo marks missing experimental workflows as `not_run`; synthetic tests are not experimental evidence.
 
 The current [model and objective specification](../docs/MODEL_AND_FITTING.md) supersedes historical raw/mixed fit recipes. Old fitted coefficients have not been relabeled as optimal for the new objective. Mammalian Adam reports its stopping reason; a finite run at an epoch/patience limit does not certify convergence.
 

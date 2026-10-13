@@ -18,9 +18,16 @@
   "data_scope": {
     "note10": "Supplied experimental table: 1141 replicate measurements",
     "note11": "Supplied processed experimental table: 216 means and sample SDs",
-    "activator": "Experimental workbook and parameter TSV missing; synthetic tests only",
-    "mammalian": "Original observations and companion input package missing; synthetic tests only",
-    "historical_algorithms": "Consolidated from ten former root notebooks; literal/synthetic tests, original experimental CSVs missing"
+    "activator": "Source workbook included; original parameter TSV still missing; experimental reconstruction not completed",
+    "mammalian": "Source workbook included; required numerical CSV/mapping/initial-vector package still missing; experimental fitting not completed",
+    "historical_algorithms": "Consolidated from ten former root notebooks; literal/synthetic tests, original experimental CSVs missing",
+    "source_workbook": {
+      "path": "data/Source data.xlsx",
+      "manifest": "data/source_data_manifest.json",
+      "sha256": "28c095d7796858118591d5a5c1670d2bb56659a75a587687a8170219e55237bf",
+      "original_filename": "Source data(4).xlsx",
+      "status": "included_unchanged"
+    }
   },
   "release_blockers": [
     "Confirm exact journal and manuscript-to-analysis mapping",
