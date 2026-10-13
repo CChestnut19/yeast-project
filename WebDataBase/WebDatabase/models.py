@@ -1,4 +1,4 @@
-# This is an auto-generated Django model module.
+﻿# This is an auto-generated Django model module.
 # You'll have to do the following manually to clean this up:
 #   * Rearrange models' order
 #   * Make sure each model has one field with primary_key=True
@@ -511,14 +511,14 @@ class Straintable(models.Model):
     background = models.CharField(db_column='Background', max_length=20)  # Field name made lowercase.
     marker = models.CharField(db_column='Marker', max_length=30)  # Field name made lowercase.
     store = models.CharField(db_column='Store', max_length=100)  # Field name made lowercase.
-
+    phenotype = models.CharField(db_column='Phenotype',max_length=500)
     class Meta:
         managed = True
         db_table = 'straintable'
         
 
 class StrainGenotypeTable(models.Model):
-    sgid = models.AutoField(db_column='sdid',primary_key=True)
+    sgid = models.AutoField(db_column='sgid',primary_key=True)
     plasmidid = models.ForeignKey(Plasmidneed,models.CASCADE,db_column='plasmidid')
     strainid = models.ForeignKey(Straintable,models.CASCADE,db_column='strainid')
 
@@ -868,10 +868,10 @@ class Backbonefeaturetable(DeduplicatingSaveMixin, models.Model):
     feature_apeinfo = models.CharField(max_length=50)
 
     strand = models.SmallIntegerField(null=True, blank=True)
-    feature_group = models.CharField(max_length=64, blank=True, default='')
+    feature_group = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     segment_order = models.PositiveIntegerField(default=0)
-    location_operator = models.CharField(max_length=20, blank=True, default='')
-    coordinate_system = models.CharField(max_length=30, default='one_based_closed')
+    location_operator = models.CharField(max_length=10, blank=True, default='')
+    coordinate_system = models.CharField(max_length=24, default='legacy_unknown')
     feature_metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -890,10 +890,10 @@ class Partfeaturetable(DeduplicatingSaveMixin, models.Model):
     feature_apeinfo = models.CharField(max_length=50)
 
     strand = models.SmallIntegerField(null=True, blank=True)
-    feature_group = models.CharField(max_length=64, blank=True, default='')
+    feature_group = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     segment_order = models.PositiveIntegerField(default=0)
-    location_operator = models.CharField(max_length=20, blank=True, default='')
-    coordinate_system = models.CharField(max_length=30, default='one_based_closed')
+    location_operator = models.CharField(max_length=10, blank=True, default='')
+    coordinate_system = models.CharField(max_length=24, default='legacy_unknown')
     feature_metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -912,12 +912,44 @@ class Plasmidfeaturetable(DeduplicatingSaveMixin, models.Model):
     feature_apeinfo = models.CharField(max_length=50)
 
     strand = models.SmallIntegerField(null=True, blank=True)
-    feature_group = models.CharField(max_length=64, blank=True, default='')
+    feature_group = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     segment_order = models.PositiveIntegerField(default=0)
-    location_operator = models.CharField(max_length=20, blank=True, default='')
-    coordinate_system = models.CharField(max_length=30, default='one_based_closed')
+    location_operator = models.CharField(max_length=10, blank=True, default='')
+    coordinate_system = models.CharField(max_length=24, default='legacy_unknown')
     feature_metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         managed = True
         db_table = 'PlasmidFeatureTable'
+
+
+class AssemblyResultVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=__import__('uuid').uuid4, editable=False)
+    plasmid = models.ForeignKey(Plasmidneed, on_delete=models.CASCADE, related_name='assembly_versions')
+    task_id = models.CharField(max_length=64, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    record = models.JSONField()
+    genbank = models.TextField()
+    sequence_digest = models.CharField(max_length=64)
+    annotation_digest = models.CharField(max_length=64)
+    input_sources = models.JSONField(default=list)
+    stored_rows_digest = models.CharField(max_length=64, default='')
+    revision_kind = models.CharField(max_length=24, default='assembly')
+
+    class Meta:
+        db_table = 'assembly_result_version'
+        ordering = ['-created_at']
+
+
+class AssemblyTask(models.Model):
+    id = models.CharField(primary_key=True, max_length=64)
+    request_key = models.CharField(max_length=64, unique=True, null=True)
+    owner_id = models.CharField(max_length=64)
+    target = models.CharField(max_length=500)
+    execution_mode = models.CharField(max_length=32, default='assemble')
+    state = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'assembly_task'

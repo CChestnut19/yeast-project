@@ -1,7 +1,4 @@
-from django.urls import reverse
-from WebDataWorld.runtime import service_url, set_task_status, output_file, page_size as bounded_page_size
-from WebDataWorld.runtime import ServiceSession, service_get
-
+﻿
 import io
 import time
 from django.shortcuts import render,redirect
@@ -33,14 +30,16 @@ from .CaculateModule.KmerIndex import KmerIndex
 # from GGModule izmport SupportGG
 from .GGModule import SupportGG
 from Bio.SeqIO import parse
+from .assembly_features import assembly_feature_payload
 import queue
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 import zipfile
 from django.utils import timezone
 from urllib.parse import quote
 from datetime import datetime, timedelta
-from LabDatabase.LabDatabaseException import LabDatabaseException,LabDatabasePOSTMethodException,LabDatabaseGETMethodException
-from LabDatabase.CacheInfo import CacheClass
+from LabDatabaseException import LabDatabaseException,LabDatabasePOSTMethodException,LabDatabaseGETMethodException
+from CacheInfo import CacheClass
 
 import uuid
 from .design_engine import (
@@ -55,9 +54,75 @@ TEXT_MAP_FILE_TYPES = {"fasta", "gb", "gbk", "ape", "str"}
 BINARY_MAP_FILE_TYPES = {"dna"}
 TEXT_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "gbk", "latin-1")
 
+Base_URL = "http://10.30.76.2:8080/WebDatabase/"
+Exp_URL = settings.GPCS_BASE_URL + "/"
+# File_Address = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\LabDatabase\static\LabDatabase\DownloadFile\GenerateFile\\"
+Assembly_File_Address = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\output"
 TASK_STATUS_PREFIX = 'file_task_'
 TASK_STATUS_LOCK = threading.Lock()
+MAP_UPLOAD_MAX_WORKERS = max(1, int(getattr(settings, "MAP_UPLOAD_MAX_WORKERS", 4)))
+MAP_UPLOAD_MAX_QUEUED = max(0, int(getattr(settings, "MAP_UPLOAD_MAX_QUEUED", 100)))
+
+
+class BoundedExecutor:
+    def __init__(self, max_workers, max_queued):
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="map-upload",
+        )
+        self._slots = threading.BoundedSemaphore(max_workers + max_queued)
+
+    def submit(self, fn, *args, **kwargs):
+        if not self._slots.acquire(blocking=False):
+            raise queue.Full("map upload queue is full")
+        try:
+            future = self._executor.submit(fn, *args, **kwargs)
+        except Exception:
+            self._slots.release()
+            raise
+        future.add_done_callback(lambda _future: self._slots.release())
+        return future
+
+
+MAP_UPLOAD_EXECUTOR = BoundedExecutor(MAP_UPLOAD_MAX_WORKERS, MAP_UPLOAD_MAX_QUEUED)
+ASSEMBLY_MAX_WORKERS = max(1, int(getattr(settings, "ASSEMBLY_MAX_WORKERS", 4)))
+ASSEMBLY_MAX_QUEUED = max(0, int(getattr(settings, "ASSEMBLY_MAX_QUEUED", 20)))
+ASSEMBLY_HTTP_TIMEOUT = getattr(settings, "ASSEMBLY_HTTP_TIMEOUT", (5, 30))
+ASSEMBLY_EXECUTOR = BoundedExecutor(ASSEMBLY_MAX_WORKERS, ASSEMBLY_MAX_QUEUED)
 CUSTOM_SCAR_LOCK = threading.Lock()
+CUSTOM_SCAR_FILE = os.path.join(settings.BASE_DIR, "LabDatabase", "static", "LabDatabase", "CustomScarInfo.txt")
+ASSEMBLY_DIR = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\LabDatabase\static\LabDatabase\DownloadFile\GenerateFile\AssemblyFile\\"
+GENBANK_FIXED_OUTPUT_DIR = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\LabDatabase\static\LabDatabase\DownloadFile\GenerateFile"
+DOWNLOAD_FILE_ADDRESS = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\LabDatabase\static\LabDatabase\DownloadFile\\"
+
+
+def _proxy_webdatabase_request(request, endpoint):
+    response = requests.request(
+        method=request.method,
+        url=f"{Base_URL}{endpoint}",
+        params=request.GET,
+        data=request.body if request.method in ("POST", "PUT", "PATCH") else None,
+        headers={"Content-Type": request.content_type or "application/json"},
+        cookies=request.COOKIES,
+        timeout=15,
+    )
+    return HttpResponse(
+        response.content,
+        status=response.status_code,
+        content_type=response.headers.get("Content-Type", "application/json"),
+    )
+
+
+@csrf_exempt
+def strain_api(request, strainid=None):
+    endpoint = "strains" if strainid is None else f"strains/{strainid}"
+    return _proxy_webdatabase_request(request, endpoint)
+
+
+@csrf_exempt
+def strain_genotype_api(request, sgid=None):
+    endpoint = "strain-genotypes" if sgid is None else f"strain-genotypes/{sgid}"
+    return _proxy_webdatabase_request(request, endpoint)
 
 UPLOAD_DATE_TABLE_CONFIG = {
     "parttable": {
@@ -109,12 +174,12 @@ def _build_related_parent_map(plasmid_ids, session=None, cookies=None):
     if not plasmid_ids:
         return {}
 
-    client = session or ServiceSession()
+    client = session or requests.Session()
     response = client.get(
-        f"{service_url('WEBDATABASE_API_BASE_URL')}GetPlasmidRelations",
+        f"{Base_URL}GetPlasmidRelations",
         params={"plasmidids": ",".join(map(str, plasmid_ids))},
         cookies=cookies,
-        timeout=settings.SERVICE_HTTP_TIMEOUT,
+        timeout=30,
     )
     if response.status_code != 200:
         raise LabDatabaseException(message="获取 Plasmid 父级关系失败")
@@ -179,7 +244,7 @@ def _plasmid_matches_advanced_filters(record, ori_value="", marker_value="", enz
 
 
 def _fetch_remote_plasmid_record(session, plasmid_id, cookies):
-    plasmid_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PlasmidByID?ID={plasmid_id}", cookies=cookies)
+    plasmid_response = session.get(f"{Base_URL}PlasmidByID?ID={plasmid_id}", cookies=cookies)
     if plasmid_response.status_code != 200:
         return None
 
@@ -188,7 +253,7 @@ def _fetch_remote_plasmid_record(session, plasmid_id, cookies):
         return None
 
     plasmid_record = plasmid_payload[0]
-    scar_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getPlasmidScar?plasmidid={plasmid_id}", cookies=cookies)
+    scar_response = session.get(f"{Base_URL}getPlasmidScar?plasmidid={plasmid_id}", cookies=cookies)
     plasmid_record["scar"] = ""
     if scar_response.status_code == 200:
         scar_payload = scar_response.json()
@@ -212,12 +277,12 @@ def _search_related_plasmid_ids(keyword, session=None, cookies=None):
     if not keyword:
         return []
 
-    client = session or ServiceSession()
+    client = session or requests.Session()
     response = client.get(
-        f"{service_url('WEBDATABASE_API_BASE_URL')}GetPlasmidRelations",
+        f"{Base_URL}GetPlasmidRelations",
         params={"keyword": keyword},
         cookies=cookies,
-        timeout=settings.SERVICE_HTTP_TIMEOUT,
+        timeout=30,
     )
     if response.status_code != 200:
         raise LabDatabaseException(message="关联 Plasmid 查询失败")
@@ -257,11 +322,11 @@ def _assembly_file_basename(name):
 
 
 def _assembly_file_path(name):
-    return output_file(settings.ASSEMBLY_INPUT_DIR, f"{_assembly_file_basename(name)}.gbk")
+    return os.path.join(ASSEMBLY_DIR, f"{_assembly_file_basename(name)}.gbk")
 
 
 def _get_task_output_dir(task_id):
-    return os.path.join(settings.ASSEMBLY_OUTPUT_DIR, str(task_id))
+    return os.path.join(Assembly_File_Address, str(task_id))
 
 
 def _ensure_task_output_dir(task_id):
@@ -306,9 +371,12 @@ def _list_task_generated_gb_files(task_id):
             if not file_name.lower().endswith(".gb"):
                 continue
             file_stem = os.path.splitext(file_name)[0]
+            # Input/provided-parts maps are provenance, not target products.
+            if os.path.basename(root) != file_stem:
+                continue
             generated_files.append({
                 "file_name": file_name,
-                "file_path": reverse("lab:getAssembly", args=[file_stem]) + f"?task_id={task_id}",
+                "file_path": f"/LabDatabase/getAssembly/{quote(file_stem)}?task_id={task_id}",
             })
 
     generated_files.sort(key=lambda item: item["file_name"])
@@ -340,7 +408,7 @@ def _get_task_archive_file(task_id):
 
 
 def _build_task_archive_download_url(task_id):
-    return reverse("lab:getAssemblyArchive", args=[str(task_id)])
+    return f"/LabDatabase/getAssemblyArchive/{quote(str(task_id))}"
 
 
 def _create_task_result_archive(task_id):
@@ -371,7 +439,7 @@ def _build_task_result_payload(task_id, final_name=None):
 
     if final_name:
         payload["file_name"] = f"{final_name}.gb"
-        payload["download_url"] = reverse("lab:getAssembly", args=[final_name]) + f"?task_id={task_id}"
+        payload["download_url"] = f"/LabDatabase/getAssembly/{quote(final_name)}?task_id={task_id}"
 
     return payload
 
@@ -441,7 +509,7 @@ def _build_map_file_object(file_content: bytes, file_type: str):
 
 def index(request):
     if(request.method == "GET"):
-        session = ServiceSession()
+        session = requests.Session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
@@ -451,10 +519,10 @@ def index(request):
         try:
             username = request.user.uname
             userid = request.user.uid
-            user_repository_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getrepocountbyuser/{userid}",cookies=request.COOKIES).json()['count']
-            user_part_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserpartcount/{username}",cookies=request.COOKIES).json()['count']
-            user_backbone_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserbackbonecount/{username}",cookies=request.COOKIES).json()['count']
-            user_plasmid_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserplasmidcount/{username}",cookies=request.COOKIES).json()['count']
+            user_repository_count = session.get(f"{Base_URL}getrepocountbyuser/{userid}",cookies=request.COOKIES).json()['count']
+            user_part_count = session.get(f"{Base_URL}getuserpartcount/{username}",cookies=request.COOKIES).json()['count']
+            user_backbone_count = session.get(f"{Base_URL}getuserbackbonecount/{username}",cookies=request.COOKIES).json()['count']
+            user_plasmid_count = session.get(f"{Base_URL}getuserplasmidcount/{username}",cookies=request.COOKIES).json()['count']
             user_info = {}
             user_info['repoCount'] = user_repository_count
             user_info['partCount'] = user_part_count
@@ -462,17 +530,17 @@ def index(request):
             user_info['plasmidCount'] = user_plasmid_count
             return render(request,'index.html',{"user":request.user,"user_info":user_info})
         except AttributeError as e:
-            return redirect("api:login")
+            return redirect("/WebDatabase/login")
     else:
         return LabDatabaseGETMethodException().to_response()
 
 
 def _load_custom_scar_records():
-    if not os.path.exists(settings.CUSTOM_SCAR_FILE):
+    if not os.path.exists(CUSTOM_SCAR_FILE):
         return []
 
     records = []
-    with open(settings.CUSTOM_SCAR_FILE, "r", encoding="utf-8") as file_obj:
+    with open(CUSTOM_SCAR_FILE, "r", encoding="utf-8") as file_obj:
         for line in file_obj:
             line = line.strip()
             if not line:
@@ -527,12 +595,12 @@ def CustomScar(request):
                 "created_at": timezone.now().isoformat(),
             }
 
-            os.makedirs(os.path.dirname(settings.CUSTOM_SCAR_FILE), exist_ok=True)
+            os.makedirs(os.path.dirname(CUSTOM_SCAR_FILE), exist_ok=True)
             with CUSTOM_SCAR_LOCK:
                 records = _load_custom_scar_records()
                 if any(item.get("scar_name", "").lower() == scar_name.lower() for item in records):
                     return JsonResponse({"success": False, "message": "scar_name already exists"}, status=409, safe=False)
-                with open(settings.CUSTOM_SCAR_FILE, "a", encoding="utf-8") as file_obj:
+                with open(CUSTOM_SCAR_FILE, "a", encoding="utf-8") as file_obj:
                     file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             return JsonResponse({"success": True, "data": record}, status=200, safe=False)
@@ -577,19 +645,26 @@ def submit_design_assembly(request):
         
         cache_obj = CacheClass("processing",0)
         
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj,timeout=100000)
         # cache.set(
         #     f"{TASK_STATUS_PREFIX}{task_id}",
         #     {"status": "processing", "progress": 0, "result": None, "error": None},
         #     timeout=100000,
         # )
 
-        thread = threading.Thread(
-            target=process_assembly_repo,
-            args=(repository.name, request, task_id),
-        )
-        thread.daemon = False
-        thread.start()
+        try:
+            ASSEMBLY_EXECUTOR.submit(
+                process_assembly_repo_async,
+                repository.name,
+                request,
+                task_id,
+            )
+        except queue.Full:
+            cache.delete(f"{TASK_STATUS_PREFIX}{task_id}")
+            return JsonResponse(
+                {"success": False, "message": "当前组装任务过多，请稍后重试"},
+                status=429,
+            )
 
         return JsonResponse(
             {
@@ -615,7 +690,7 @@ def submit_design_assembly(request):
 def getData(request):
     # print(request.session['info']['uname'])
     try:
-        session = ServiceSession()
+        session = requests.Session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
@@ -630,7 +705,7 @@ def getData(request):
                     # cookies = {}
                     # if(sessionid):
                     #     cookies[settings.SESSION_COOKIE_NAME] = sessionid
-                promoterResponse = service_get(f'{service_url("WEBDATABASE_API_BASE_URL")}Part?page={page}',cookies=request.COOKIES)
+                promoterResponse = requests.get(f'{Base_URL}Part?page={page}',cookies=request.COOKIES)
                 # print(promoterResponse.url)
                 if(promoterResponse.status_code == 200):
                     promoter = promoterResponse.json()
@@ -641,7 +716,7 @@ def getData(request):
                 #     return JsonResponse(str(e),status = 400, safe=False)
             elif(type == "backbone"):
                 # try:
-                backboneResponse = service_get(f'{service_url("WEBDATABASE_API_BASE_URL")}Backbone?page={page}',cookies=request.COOKIES)
+                backboneResponse = requests.get(f'{Base_URL}Backbone?page={page}',cookies=request.COOKIES)
                 if(backboneResponse.status_code == 200):
                     backbone = backboneResponse.json()
                     return JsonResponse(backbone,status=200,safe=False)
@@ -652,7 +727,7 @@ def getData(request):
                 #     return JsonResponse(str(e),status = 400, safe=False)
             elif(type == "plasmid"):
                 # try:
-                plasmidResponse = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}Plasmid?page={page}',cookies=request.COOKIES)
+                plasmidResponse = session.get(f'{Base_URL}Plasmid?page={page}',cookies=request.COOKIES)
                 if(plasmidResponse.status_code == 200):
                     plasmid = plasmidResponse.json()
                     if isinstance(plasmid, dict) and isinstance(plasmid.get("data"), list):
@@ -673,13 +748,224 @@ def getData(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status = 400)
+        return JsonResponse({"success":False,"message":str(exc)},status = 500)
+
+
+def _safe_excel_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set)):
+        value = json.dumps(value, ensure_ascii=False, default=str)
+    elif not isinstance(value, (str, int, float, bool, datetime)):
+        value = str(value)
+
+    if isinstance(value, str):
+        value = value[:32767]
+        if value.startswith(("=", "+", "-", "@")):
+            value = "'" + value
+    return value
+
+
+def export_selected_data(request):
+    """Receive selected table rows and return them as an Excel workbook."""
+    if request.method != "POST":
+        return JsonResponse(
+            {"success": False, "message": "Only POST method is allowed"},
+            status=405,
+        )
+
+    try:
+        payload = json.loads(request.body or b"{}")
+        data_type = str(payload.get("type", "")).strip().lower()
+        records = payload.get("records")
+
+        if data_type not in {"part", "backbone", "plasmid"}:
+            raise LabDatabaseException(message="导出数据类型无效", status_code=400)
+        if not isinstance(records, list) or not records:
+            raise LabDatabaseException(message="没有选择需要导出的数据", status_code=400)
+        if len(records) > 5000:
+            raise LabDatabaseException(message="单次最多导出 5000 条数据", status_code=400)
+        if any(not isinstance(record, dict) for record in records):
+            raise LabDatabaseException(message="导出记录格式无效", status_code=400)
+
+        preferred_headers = {
+            "part": ["partid", "name", "alias", "type", "sourceorganism", "reference", "tag"],
+            "backbone": ["id", "name", "alias", "marker", "ori", "species", "scar", "tag"],
+            "plasmid": ["plasmidid", "name", "alias", "ori_info", "marker_info", "level", "related_parents", "scar", "tag"],
+        }[data_type]
+        available_headers = {
+            str(key)
+            for record in records
+            for key in record.keys()
+            if not str(key).startswith("_")
+        }
+        headers = [key for key in preferred_headers if key in available_headers]
+        headers.extend(sorted(available_headers.difference(headers)))
+        if not headers or len(headers) > 100:
+            raise LabDatabaseException(message="导出数据字段无效", status_code=400)
+
+        records = [record.copy() for record in records]
+        sequence_session = requests.Session()
+        sequence_session.headers.update({
+            "User-Agent": "Django-App/1.0",
+            "Accept": "application/json",
+        })
+
+        def fetch_sequence(endpoint, params, sequence_key, record_name):
+            try:
+                response = sequence_session.get(
+                    f"{Base_URL}{endpoint}",
+                    params=params,
+                    cookies=request.COOKIES,
+                    timeout=15,
+                )
+            except requests.RequestException as exc:
+                raise LabDatabaseException(
+                    message=f"获取 {record_name} 序列失败: {exc}",
+                    status_code=502,
+                ) from exc
+
+            if response.status_code != 200:
+                try:
+                    error_message = response.json().get("message")
+                except (ValueError, AttributeError):
+                    error_message = None
+                raise LabDatabaseException(
+                    message=error_message or f"获取 {record_name} 序列失败（HTTP {response.status_code}）",
+                    status_code=502,
+                )
+
+            try:
+                sequence = response.json().get("data", {}).get(sequence_key)
+            except (ValueError, AttributeError):
+                sequence = None
+            if sequence is None:
+                raise LabDatabaseException(
+                    message=f"{record_name} 的序列接口返回格式错误",
+                    status_code=502,
+                )
+            return sequence
+
+        def fetch_upload_user_map(endpoint, id_key):
+            try:
+                response = sequence_session.get(
+                    f"{Base_URL}{endpoint}",
+                    params={"page": 0},
+                    cookies=request.COOKIES,
+                    timeout=30,
+                )
+            except requests.RequestException as exc:
+                raise LabDatabaseException(
+                    message=f"获取 {data_type} 上传用户信息失败: {exc}",
+                    status_code=502,
+                ) from exc
+
+            if response.status_code != 200:
+                raise LabDatabaseException(
+                    message=f"获取 {data_type} 上传用户信息失败（HTTP {response.status_code}）",
+                    status_code=502,
+                )
+            try:
+                payload = response.json()
+                rows = payload.get("data", []) if isinstance(payload, dict) else payload
+            except ValueError as exc:
+                raise LabDatabaseException(
+                    message=f"{data_type} 上传用户接口返回了非 JSON 数据",
+                    status_code=502,
+                ) from exc
+            if not isinstance(rows, list):
+                raise LabDatabaseException(
+                    message=f"{data_type} 上传用户接口返回格式错误",
+                    status_code=502,
+                )
+            return {
+                str(row.get(id_key)): row.get("user") or ""
+                for row in rows
+                if isinstance(row, dict) and row.get(id_key) not in (None, "")
+            }
+
+        if data_type == "part":
+            upload_users = fetch_upload_user_map("Part", "partid")
+            for record in records:
+                part_id = record.get("partid")
+                if part_id in (None, ""):
+                    raise LabDatabaseException(message="Part 导出记录缺少 partid", status_code=400)
+                record["sequence"] = fetch_sequence(
+                    "GetPartSeqByID",
+                    {"partid": part_id},
+                    "level0sequence",
+                    f"Part {record.get('name') or part_id}",
+                )
+                record["upload_user"] = upload_users.get(str(part_id), "")
+        elif data_type == "backbone":
+            upload_users = fetch_upload_user_map("Backbone", "id")
+            for record in records:
+                backbone_id = record.get("id")
+                if backbone_id in (None, ""):
+                    raise LabDatabaseException(message="Backbone 导出记录缺少 id", status_code=400)
+                record["sequence"] = fetch_sequence(
+                    "GetBackboneSeqByID",
+                    {"backboneid": backbone_id},
+                    "sequence",
+                    f"Backbone {record.get('name') or backbone_id}",
+                )
+                record["upload_user"] = upload_users.get(str(backbone_id), "")
+        elif data_type == "plasmid":
+            upload_users = fetch_upload_user_map("Plasmid", "plasmidid")
+            for record in records:
+                plasmid_id = record.get("plasmidid")
+                if plasmid_id in (None, ""):
+                    raise LabDatabaseException(message="Plasmid 导出记录缺少 plasmidid", status_code=400)
+                record["sequence"] = fetch_sequence(
+                    "PlasmidSeqByID",
+                    {"plasmidid": plasmid_id},
+                    "sequenceconfirm",
+                    f"Plasmid {record.get('name') or plasmid_id}",
+                )
+                record["upload_user"] = upload_users.get(str(plasmid_id), "")
+
+        if "sequence" not in headers:
+            headers.append("sequence")
+        if "upload_user" not in headers:
+            headers.append("upload_user")
+
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = data_type.capitalize()
+        worksheet.append(headers)
+        for record in records:
+            worksheet.append([_safe_excel_cell(record.get(header)) for header in headers])
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+        output = io.BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        filename = f"{data_type}_selected_data_{timezone.localdate():%Y%m%d}.xlsx"
+        return FileResponse(
+            output,
+            as_attachment=True,
+            filename=filename,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except LabDatabaseException as exc:
+        return exc.to_response()
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"success": False, "message": "请求数据不是有效的 JSON"},
+            status=400,
+        )
+    except Exception as exc:
+        return JsonResponse(
+            {"success": False, "message": f"导出数据失败: {exc}"},
+            status=500,
+        )
             
 
 def DataFilter(request):
     # print(request.session['info']['uname'])
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',
@@ -693,7 +979,7 @@ def DataFilter(request):
             if(type == "part"):
                 # try:
                 request_body = {'type':data.get('Type',""),"Enzyme":data.get('Enzyme',""),"Scar":data.get('Scar',""),"name":data.get('name',""),"page":page,"page_size":10}
-                promoterResponse = session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}PartFilter',json=request_body,cookies=request.COOKIES)
+                promoterResponse = session.post(f'{Base_URL}PartFilter',json=request_body,cookies=request.COOKIES)
                 if(promoterResponse.status_code == 200):
                     promoter = promoterResponse.json()
                     return JsonResponse(promoter,status=200,safe=False)
@@ -704,7 +990,7 @@ def DataFilter(request):
             elif(type == "backbone"):
             # try:
                 request_body = {'ori':data.get('Ori',""),'marker':data.get('Marker',""),'Enzyme':data.get('Enzyme',""),'Scar':data.get('Scar',""),'name':data.get("name",""),"page":page,"page_size":10}
-                backboneResponse = session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}BackboneFilter',json=request_body,cookies=request.COOKIES)
+                backboneResponse = session.post(f'{Base_URL}BackboneFilter',json=request_body,cookies=request.COOKIES)
                 if(backboneResponse.status_code == 200):
                     backbone = backboneResponse.json()
                     # print(backbone)
@@ -714,7 +1000,7 @@ def DataFilter(request):
             # except requests.exceptions.RequestException as e:
             #     return JsonResponse(str(e),status = 400, safe=False)
             elif(type == "plasmid"):
-                page_size = bounded_page_size(data.get("page_size"))
+                page_size = int(data.get("page_size", 10) or 10)
                 keyword = _normalize_text(data.get("name", ""))
                 ori_value = data.get("Ori", "")
                 marker_value = data.get("Marker", "")
@@ -729,7 +1015,7 @@ def DataFilter(request):
                     'page': page,
                     "page_size": page_size,
                 }
-                plasmidResponse = session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}PlasmidFilter',json=request_body,cookies=request.COOKIES)
+                plasmidResponse = session.post(f'{Base_URL}PlasmidFilter',json=request_body,cookies=request.COOKIES)
                 if(plasmidResponse.status_code != 200):
                     raise LabDatabaseException(message="没有匹配的搜索结果")
 
@@ -805,7 +1091,7 @@ def UploadPartMap(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status = 400)
+        return JsonResponse({"success":False,"message":str(exc)},status = 500)
 
 def UploadBackboneMap(request):
     pass
@@ -817,26 +1103,31 @@ def download_template(request,type):
     print(type)
     try:
         if(type == 'part'):
-            template_path = os.path.join(settings.DOWNLOAD_TEMPLATE_DIR, 'PartColumn.xlsx')
+            template_path = f'{DOWNLOAD_FILE_ADDRESS}PartColumn.xlsx'
             if(os.path.exists(template_path)):
                 response = FileResponse(open(template_path,'rb'),as_attachment=True,filename='part_template.xlsx')
                 return response
         elif(type == 'backbone'):
-            template_path = os.path.join(settings.DOWNLOAD_TEMPLATE_DIR, 'BackboneColumn.xlsx')
+            template_path = f'{DOWNLOAD_FILE_ADDRESS}BackboneColumn.xlsx'
             if(os.path.exists(template_path)):
                 response = FileResponse(open(template_path,'rb'),as_attachment=True,filename='Backbone_template.xlsx')
                 return response
         elif(type == 'plasmid'):
-            template_path = os.path.join(settings.DOWNLOAD_TEMPLATE_DIR, 'PlasmidColumn.xlsx')
+            template_path = f'{DOWNLOAD_FILE_ADDRESS}\PlasmidColumn.xlsx'
             if(os.path.exists(template_path)):
                 response = FileResponse(open(template_path,'rb'),as_attachment=True,filename='plasmid_template.xlsx')
                 return response
         elif(type == "assembly"):
-            template_path = os.path.join(settings.DOWNLOAD_TEMPLATE_DIR, 'AssemblyPlan.xlsx')
+            template_path = f'{DOWNLOAD_FILE_ADDRESS}\AssemblyPlan.xlsx'
             print(template_path)
             if(os.path.exists(template_path)):
                 print("aaaaaaaa")
                 response = FileResponse(open(template_path,'rb'),as_attachment=True,filename='AssemblyPlan_template.xlsx')
+                return response
+        elif(type == "strain"):
+            template_path = os.path.join(DOWNLOAD_FILE_ADDRESS, "StrainColumn.xlsx")
+            if os.path.exists(template_path):
+                response = FileResponse(open(template_path,'rb'),as_attachment=True,filename="strain_template.xlsx")
                 return response
         else:
             raise LabDatabaseException(message="模板文件不存在")
@@ -845,20 +1136,19 @@ def download_template(request,type):
         return exc.to_response()
     except Exception as exc:
         print(str(exc))
-        return JsonResponse({"success":False,"message":str(exc)}, status = 400)
+        return JsonResponse({"success":False,"message":str(exc)}, status = 500)
 
 
 """
 file_name: [filename, file_type]
 """
-def process_map_async(upload_map, file_name, upload_type, django_request, task_id, index, number_of_task, save_feature=False):
+def process_map_async(upload_map_content, file_name, upload_type, django_request, task_id, index, number_of_task, save_feature=True):
     try:
         result = False
         task_error = None
-        upload_map_temp = upload_map.read()
-        upload_map.seek(0)
-        file_obj = _build_map_file_object(upload_map_temp, file_name[1])
-        result = process_map_file(file_obj, file_name, upload_type, django_request, service_url('WEBDATABASE_API_BASE_URL'), save_feature=save_feature)
+        file_obj = _build_map_file_object(upload_map_content, file_name[1])
+        result = process_map_file(file_obj, file_name, upload_type, django_request, Base_URL, save_feature=save_feature, task_id=task_id)
+        upload_warning = result.get("warning", "") if isinstance(result, dict) else ""
         # except ValueError as e:
         #     task_error = f"{file_name[0]} upload failed: {str(e)}"
         # except Exception as e:
@@ -888,8 +1178,12 @@ def process_map_async(upload_map, file_name, upload_type, django_request, task_i
             # total_count = task_status.get('total_count', number_of_task)
             cache_obj.setProgress(int(cache_obj.getProcessedCount() * 100 / max(cache_obj.getTotalCount(),1)))
             # progress = int(processed_count * 100 / max(total_count, 1))
-            cache_obj.setStatus("completed" if cache_obj.getProcessedCount() >= cache_obj.getTotalCount() else "processing")
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+            if cache_obj.getStatus() != "failed":
+                cache_obj.setStatus("completed" if cache_obj.getProcessedCount() >= cache_obj.getTotalCount() else "processing")
+            if upload_warning:
+                current_message = cache_obj.getMessage()
+                cache_obj.setMessage(f"{current_message}, {upload_warning}" if current_message else upload_warning)
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
     except LabDatabaseException as exc:
         print(exc.message)
         with TASK_STATUS_LOCK:
@@ -897,9 +1191,10 @@ def process_map_async(upload_map, file_name, upload_type, django_request, task_i
             cache_obj.setProcessedCount(cache_obj.getProcessedCount() + 1)
             cache_obj.setTotalCount(cache_obj.getTotalCount())
             cache_obj.setProgress(int(cache_obj.getProcessedCount() * 100 / max(cache_obj.getTotalCount(),1)))
-            cache_obj.setStatus("completed" if cache_obj.getProcessedCount() >= cache_obj.getTotalCount() else "processing")
-            cache_obj.setMessage(cache_obj.getMessage() + ", " + exc.message)
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+            cache_obj.setStatus("failed")
+            cache_obj.setError(exc.message)
+            cache_obj.setMessage((cache_obj.getMessage() + ", " + exc.message).strip(", "))
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
     except Exception as exc:
         print(str(exc))
         with TASK_STATUS_LOCK:
@@ -907,9 +1202,11 @@ def process_map_async(upload_map, file_name, upload_type, django_request, task_i
             cache_obj.setProcessedCount(cache_obj.getProcessedCount() + 1)
             cache_obj.setTotalCount(cache_obj.getTotalCount())
             cache_obj.setProgress(int(cache_obj.getProcessedCount() * 100 / max(cache_obj.getTotalCount(),1)))
-            cache_obj.setStatus("completed" if cache_obj.getProcessedCount() >= cache_obj.getTotalCount() else "processing")
-            cache_obj.setMessage(cache_obj.getMessage() + f", {file_name[0]} " + str(exc))
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+            cache_obj.setStatus("failed")
+            error_message = f"{file_name[0]} {exc}"
+            cache_obj.setError(error_message)
+            cache_obj.setMessage((cache_obj.getMessage() + ", " + error_message).strip(", "))
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
 
 def process_excel_async(upload_record,django_request,task_id):
     try:
@@ -922,7 +1219,7 @@ def process_excel_async(upload_record,django_request,task_id):
         #     'error':[]
         # }
         cache_obj = CacheClass("processing",10)
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj,timeout=3600)
             # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status,timeout=3600)
         file_content = upload_record.read()
         excel_data = pd.read_excel(io.BytesIO(file_content))
@@ -933,10 +1230,12 @@ def process_excel_async(upload_record,django_request,task_id):
             type = "backbone"
         elif(excel_data.columns.tolist()[0] == "PlasmidName"):
             type = "plasmid"
+        elif(excel_data.columns.tolist()[0] == "StrainName"):
+            type = "strain"
         if(type == None):
             raise LabDatabaseException(message="无法识别上传文件的数据类型,请检查上传文件的列名")
         print(type)
-        result = ExcelProcessor.process_excel_file(django_request,excel_data,type,service_url('WEBDATABASE_API_BASE_URL'))
+        result = ExcelProcessor.process_excel_file(django_request,excel_data,type,Base_URL)
             # print(result)
         if(result["success"]):
             print("success")
@@ -945,11 +1244,15 @@ def process_excel_async(upload_record,django_request,task_id):
             with TASK_STATUS_LOCK:
                 cache_obj.setProgress(100)
                 cache_obj.setStatus("completed")
-                if(len(result["error_row"]) != 0 or len(result["empty_Seq_rows"])):
-                    cache_obj.setMessage(f"上传出错的数据行有: {', '.join(result['error_row'])}, 需要补充序列的数据行有: {', '.join(result['empty_Seq_rows'])}")
-                else:
-                    cache_obj.setMessage(f"上传成功")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+                message_parts = []
+                if result["error_row"]:
+                    message_parts.append(f"上传出错的数据行有: {', '.join(result['error_row'])}")
+                if result["empty_Seq_rows"]:
+                    message_parts.append(f"需要补充序列的数据行有: {', '.join(result['empty_Seq_rows'])}")
+                if result.get("warning_rows"):
+                    message_parts.append(f"提示: {', '.join(result['warning_rows'])}")
+                cache_obj.setMessage("; ".join(message_parts) if message_parts else "上传成功")
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
                 # Empty_sequence_rows = result['empty_Seq_rows']
                 # if len(Error_rows) == 0 and len(Empty_sequence_rows) == 0:
                 #     task_status['result'] = {
@@ -971,14 +1274,14 @@ def process_excel_async(upload_record,django_request,task_id):
                 cache_obj.setProgress(0)
                 cache_obj.setStatus("failed")
                 cache_obj.setMessage(result['error'])
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
         # print(Empty_sequence_rows)
     except Exception as e:
         with TASK_STATUS_LOCK:
             cache_obj.setProgress(0)
             cache_obj.setStatus("failed")
             cache_obj.setMessage(str(e))
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
         # task_status = {
         #     'status':'failed',
         #     'progress':100,
@@ -987,7 +1290,7 @@ def process_excel_async(upload_record,django_request,task_id):
         # }
     # ExcelProcessor.process_excel_file(upload_record)
 
-def process_gg_assembly_async(upload_file, django_request, task_id):
+def _process_gg_assembly_body(upload_content, django_request, task_id, execution_mode="prepare_and_assemble"):
     try:
         # task_status = {
         #     'status':'processing',
@@ -996,9 +1299,8 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
         #     'error':[]
         # }
         cache_obj = CacheClass("processing",0)
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
-        file_content = upload_file.read()
-        excel_data = pd.read_excel(io.BytesIO(file_content),engine='openpyxl')
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
+        excel_data = pd.read_excel(io.BytesIO(upload_content),engine='openpyxl')
         if 'Assembly' in excel_data.columns and 'AssemblyName' not in excel_data.columns:
             excel_data = excel_data.rename(columns={'Assembly':'AssemblyName'})
         if 'Level' not in excel_data.columns:
@@ -1006,7 +1308,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                 cache_obj.setStatus("failed")
                 cache_obj.setProgress(100)
                 cache_obj.setMessage("上传表格中没有Level信息列,请更新组装表格模板")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
             return
             # task_status['status'] = 'failed'
             # task_status['progress'] = 100
@@ -1018,10 +1320,19 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
             # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status,timeout=3600)
             # return
         excel_data = excel_data.copy()
-        fill_column = ['AssemblyName','Alias','Level','Backbone','Plasmid','Note']
-        for col in excel_data.columns:
-            if col in fill_column:
-                excel_data[col] = excel_data[col].ffill()
+        # 方案名称的空白表示延续上一方案（包括纵向合并单元格）。
+        excel_data['AssemblyName'] = (
+            excel_data['AssemblyName'].replace(r'^\s*$', pd.NA, regex=True)
+            .ffill().map(lambda value: str(value).strip() if pd.notna(value) else value)
+        )
+        # 其他字段仅在同一方案内继承，避免新方案的空白引用上一方案。
+        fill_columns = [
+            col for col in ['Alias', 'Level', 'Backbone', 'Plasmid', 'Note']
+            if col in excel_data.columns
+        ]
+        excel_data[fill_columns] = (
+            excel_data.groupby('AssemblyName', sort=False)[fill_columns].ffill()
+        )
         excel_data['Level'] = excel_data['Level'].apply(
             lambda value: str(value).strip().replace('.0', '') if pd.notna(value) else ''
         )
@@ -1044,7 +1355,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                 cache_obj.setStatus('failed')
                 cache_obj.setProgress(100)
                 cache_obj.setMessage("组装文件为空")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
             # task_status['status'] = 'failed'
             # task_status['progress'] = 100
             # task_status['error'] = '组装文件为空'
@@ -1055,7 +1366,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
             # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status,timeout=3600)
             return
 
-        session = ServiceSession()
+        session = requests.Session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
@@ -1084,9 +1395,10 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
             result = GGAssembly.GGFileProcessor.createTemporaryRepo(
                 django_request,
                 level_data,
-                service_url('WEBDATABASE_API_BASE_URL'),
+                Base_URL,
             )
             if not result['success']:
+                failed_assemblies.update({name: str(result.get('error_row') or result.get('error') or 'Repository preparation failed') for name in assembly_names})
                 with TASK_STATUS_LOCK:
                     cache_obj.setStatus("processing")
                     if(level_index == 1):
@@ -1096,7 +1408,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                     elif(level_index == 3):
                         cache_obj.setProgress(30)
                     cache_obj.setMessage(cache_obj.getMessage() + "\n" + f"Level {level_index} 上传仓库失败: {result['error_row'] if 'error_row' in result else result['error']}")
-                set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+                cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
                 # task_status['status'] = 'failed'
                 # task_status['progress'] = 100
                 # task_status['error'] = result['error']
@@ -1106,7 +1418,8 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                 # }
                 # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status,timeout=3600)
                 continue
-            if 'error_row' in result:
+            if result.get('error_row'):
+                failed_assemblies.update({name: str(result['error_row']) for name in assembly_names})
                 with TASK_STATUS_LOCK:
                     cache_obj.setStatus("processing")
                     if(level_index == 1):
@@ -1116,7 +1429,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                     elif(level_index == 3):
                         cache_obj.setProgress(30)
                     cache_obj.setMessage(cache_obj.getMessage() + "\n" + f"Level {level_index} 上传中出现如下错误 {result['error_row']}")
-                set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+                cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
                     # task_status['progress'] = 100
                 # task_status['status'] = 'completed'
                 # task_status['result'] = {
@@ -1126,11 +1439,14 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                 # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status,timeout=3600)
                 continue
             print("上传完成")
+            if execution_mode == 'prepare_only':
+                completed_assemblies.extend(assembly_names)
+                continue
             empty_repositories = []
             assembly_queue = queue.Queue()
             for assembly_name in assembly_names:
                 repository_response = session.post(
-                    f"{service_url('WEBDATABASE_API_BASE_URL')}getrepo",
+                    f"{Base_URL}getrepo",
                     json={'Name':assembly_name},
                     cookies=django_request.COOKIES
                 )
@@ -1148,6 +1464,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                     repository_data.get('total_backbones', 0) == 0
                 ):
                     empty_repositories.append(assembly_name)
+                    failed_assemblies[assembly_name] = "Empty repository"
                     continue
                 assembly_queue.put(assembly_name)
 
@@ -1156,7 +1473,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                     cache_obj.setStatus('processing')
                     cache_obj.setProgress(40)
                     cache_obj.setMessage(cache_obj.getMessage() + "\n" + f"本批上传的仓库中空仓库有: {','.join(empty_repositories)}")
-                    set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+                    cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
                 # task_status['status'] = 'failed'
                 # task_status['progress'] = 100
                 # task_status['error'] = f"空仓库: {', '.join(empty_repositories)}"
@@ -1221,7 +1538,7 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                         for each_key in failed_assemblies:
                             error += failed_assemblies[each_key]+"\n"
                         cache_obj.setMessage(cache_obj.getMessage() + "\n" + error+"\n" + "批量组装失败")
-                        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+                        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj)
                         return
                     # task_status = {
                     #     'status':'failed',
@@ -1237,18 +1554,21 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
                     # return
         
         with TASK_STATUS_LOCK:
-            cache_obj.setStatus('completed')
+            cache_obj.setStatus('failed' if failed_assemblies else 'completed')
             cache_obj.setProgress(100)
             result_payload = _build_task_result_payload(task_id)
             result_payload.update({
                 'success': True,
                 'completed': completed_assemblies,
+                'failed': failed_assemblies,
+                'execution_mode': execution_mode,
+                'success': not bool(failed_assemblies),
             })
             cache_obj.setResult(result_payload)
             cache_obj.setMessage(cache_obj.getMessage() + "\n" + "组装结束")
             print(result_payload)
             print(cache_obj.getMessage() + "\n" + "组装结束")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
         # task_status['progress'] = 100
         # task_status['status'] = 'completed'
         # task_status['result'] = {
@@ -1262,13 +1582,13 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(cache_obj.getMessage() + "\n" + f"组装失败,{exc.message}")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
     except Exception as e:
         with TASK_STATUS_LOCK:
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(cache_obj.getMessage() + "\n" + f"组装失败,{str(e)}")
-            set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+            cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
         # task_status = {
         #     'status':'failed',
         #     'progress':100,
@@ -1280,38 +1600,39 @@ def process_gg_assembly_async(upload_file, django_request, task_id):
 
 
 def CreateTempRepository(request):
-    # print(request.FILES)
+    from .assembly_tasks import register
+    if request.method != 'POST' or not request.FILES.get('file'):
+        return JsonResponse({'success': False, 'message': 'An assembly file is required'}, status=400)
+    mode = request.POST.get('execution_mode', 'prepare_and_assemble')
+    if mode not in ('prepare_only', 'prepare_and_assemble'):
+        return JsonResponse({'success': False, 'message': 'Invalid execution_mode'}, status=400)
+    file = request.FILES['file']
+    task, created = register(request, file.name, mode, request.POST.get('request_id'))
+    if not created:
+        return JsonResponse(dict(task.state, task_id=task.pk, execution_mode=mode, reused=True))
+    file_content = file.read()
+    cache.set(f'{TASK_STATUS_PREFIX}{task.pk}', CacheClass('processing', 0), timeout=3600)
     try:
-        if(request.method == "POST" and request.FILES):
-            file = request.FILES.get('file')
-            
-            task_id = str(uuid.uuid4())
-            cache_obj = CacheClass("processing",0)
-            # task_status = {
-            #     'status':'processing',
-            #     'progress':0,
-            #     'result':None,
-            #     'error':None,
-            # }
-            set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
-        
-            thread = threading.Thread(
-                target=process_gg_assembly_async,
-                args=(file, request, task_id)
-            )
-            thread.daemon = False
-            thread.start()
-            return JsonResponse({'task_id':task_id,'status':'processing','message':"上传成功，数据分析中"},status = 200, safe = False)
-        else:
-            if(request.method != "POST"):
-                raise LabDatabasePOSTMethodException()
-            if(request.FILES == None):
-                raise LabDatabaseException(message="上传文件为空")
-            # return JsonResponse({'success':False,'message':'上传失败'},status = 405, safe = False)
-    except LabDatabaseException as exc:
-        return exc.to_response()
-    except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        ASSEMBLY_EXECUTOR.submit(
+            process_gg_assembly_async,
+            file_content,
+            request,
+            task.pk,
+            mode,
+        )
+    except queue.Full:
+        from .assembly_tasks import update
+        message = '当前组装任务过多，请稍后重试'
+        cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task.pk}')
+        cache_obj.setStatus('failed')
+        cache_obj.setProgress(100)
+        cache_obj.setMessage(message)
+        cache.set(f'{TASK_STATUS_PREFIX}{task.pk}', cache_obj)
+        update(task.pk, status='failed', phase='queued', progress=100,
+               message=message, success=False)
+        return JsonResponse({'success': False, 'message': message}, status=429)
+    return JsonResponse({'task_id': task.pk, 'status': 'processing', 'execution_mode': mode,
+                         'message': '仓库准备中' if mode == 'prepare_only' else '仓库准备并组装中'})
     
     
 @csrf_exempt
@@ -1331,7 +1652,7 @@ def UploadFile(request):
             #     'result':None,
             #     'error':None,
             # }
-            set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+            cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
             thread = threading.Thread(
                 target = process_excel_async,
                 args= (file,request,task_id)
@@ -1358,9 +1679,13 @@ def UploadFile(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)})
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
     
 def task_status(request, task_id):
+    from WebDatabase.models import AssemblyTask
+    task = AssemblyTask.objects.filter(pk=task_id).first()
+    if task:
+        return JsonResponse(dict(task.state, task_id=task_id, execution_mode=task.execution_mode))
     try:
         cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')
         if(not cache_obj):
@@ -1407,7 +1732,7 @@ def task_status(request, task_id):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 def excel_task_status(request, task_id):
     try:
@@ -1448,7 +1773,7 @@ def UploadMap(request):
         if request.method == 'POST' and request.FILES.getlist('files'):
             files = request.FILES.getlist('files')
             number_of_task = len(files)
-            cache_obj = CacheClass("processing",0,total_count = number_of_task)
+            cache_obj = CacheClass("processing",0,processed_count=0,total_count=number_of_task)
             # task_status = {
             #     'status':'processing',
             #     'progress':0,
@@ -1458,14 +1783,14 @@ def UploadMap(request):
             #     'total_count':number_of_task,
             # }
             task_id = str(uuid.uuid4())
-            set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+            cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
             # upload_map,file_name,upload_type,django_request, task_id
         
             # title = request.POST.get('title', file.name)
-            pattern = r'^([^\_|.]+)'
+            pattern = r'^([^\|.]+)'
             # print(number_of_task)
             index = 0
-            save_feature = str(request.POST.get('save_feature', 'false')).lower() in ['true', '1', 'yes', 'on']
+            save_feature = str(request.POST.get('save_feature', 'true')).lower() in ['true', '1', 'yes', 'on']
             for each in files:
                 suffix = each.name.split('.')[1]
                 each_name = []
@@ -1474,12 +1799,29 @@ def UploadMap(request):
                 each_name.append(suffix)
                 print(each_name)
                 type = request.POST.get('type')
-                thread = threading.Thread(
-                    target = process_map_async,
-                    args= (each,each_name,type,request,task_id,index,number_of_task,save_feature)
-                )
-                thread.daemon = False
-                thread.start()
+                upload_map_content = each.read()
+                try:
+                    MAP_UPLOAD_EXECUTOR.submit(
+                        process_map_async,
+                        upload_map_content,
+                        each_name,
+                        type,
+                        request,
+                        task_id,
+                        index,
+                        number_of_task,
+                        save_feature,
+                    )
+                except queue.Full:
+                    with TASK_STATUS_LOCK:
+                        current = cache.get(f'{TASK_STATUS_PREFIX}{task_id}') or cache_obj
+                        current.setProcessedCount(current.getProcessedCount() + 1)
+                        current.setProgress(int(current.getProcessedCount() * 100 / max(current.getTotalCount(), 1)))
+                        current.setStatus("failed")
+                        error_message = f"{each_name[0]} 上传队列已满，请稍后重试"
+                        current.setError(error_message)
+                        current.setMessage((current.getMessage() + ", " + error_message).strip(", "))
+                        cache.set(f'{TASK_STATUS_PREFIX}{task_id}', current, timeout=3600)
                 index+=1
             return JsonResponse({'task_id':task_id,'status':'processing','message':"上传成功，数据处理中"},status = 200, safe = False)
         else:
@@ -1488,7 +1830,7 @@ def UploadMap(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 @csrf_exempt
@@ -1511,8 +1853,8 @@ def CheckAndFixGenBank(request):
         safe_base = re.sub(r'[\\/:*?"<>|]+', "_", upload_base)
         save_name = f"{safe_base}.gb"
 
-        os.makedirs(settings.GENERATED_FILES_DIR, exist_ok=True)
-        save_path = output_file(settings.GENERATED_FILES_DIR, save_name)
+        os.makedirs(GENBANK_FIXED_OUTPUT_DIR, exist_ok=True)
+        save_path = os.path.join(GENBANK_FIXED_OUTPUT_DIR, save_name)
 
         with open(save_path, "wb") as f:
             f.write(result["fixed_bytes"])
@@ -1530,7 +1872,7 @@ def CheckAndFixGenBank(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)})
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
     # except Exception as e:
     #     return JsonResponse({"success": False, "message": str(e)}, status=500, safe=False)
 
@@ -1539,12 +1881,12 @@ def CheckAndFixGenBank(request):
 def part_detail_show(request,partid):
     try:
         if(request.method == "GET"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
-            partResponse = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}PartByID?ID={partid}',cookies=request.COOKIES)
+            partResponse = session.get(f'{Base_URL}PartByID?ID={partid}',cookies=request.COOKIES)
             if(partResponse.status_code == 200):
                 part = partResponse.json()[0]
                 if(part['type'] == 1):
@@ -1575,13 +1917,13 @@ def part_detail_show(request,partid):
 def backbone_detail_show(request,backboneid):
     try:
         if(request.method == "GET"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
-            backboneResponse = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}BackboneByID?ID={backboneid}',cookies=request.COOKIES)
-            backbonescar = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getBackboneScar?id={backboneid}",cookies=request.COOKIES)
+            backboneResponse = session.get(f'{Base_URL}BackboneByID?ID={backboneid}',cookies=request.COOKIES)
+            backbonescar = session.get(f"{Base_URL}getBackboneScar?id={backboneid}",cookies=request.COOKIES)
             if(backboneResponse.status_code == 200):
                 backbone = backboneResponse.json()[0]
                 backbone['ori'] = ", ".join(backbone['ori'])
@@ -1608,22 +1950,22 @@ def backbone_detail_show(request,backboneid):
 def plasmid_detail_show(request,plasmidid):
     try:
         if(request.method == "GET"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
-            plasmidResponse = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}PlasmidByID?ID={plasmidid}',cookies=request.COOKIES)
-            plasmidScar = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}getPlasmidScar?plasmidid={plasmidid}',cookies = request.COOKIES)
+            plasmidResponse = session.get(f'{Base_URL}PlasmidByID?ID={plasmidid}',cookies=request.COOKIES)
+            plasmidScar = session.get(f'{Base_URL}getPlasmidScar?plasmidid={plasmidid}',cookies = request.COOKIES)
             # print(plasmidScar)
             # print(plasmidScar.json()["scar_info"][0])
-            plasmidParentPart = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPartParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentPart = session.get(f'{Base_URL}GetPartParent?plasmidid={plasmidid}',cookies=request.COOKIES)
             print(plasmidParentPart.json())
-            plasmidParentBackbone = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetBackboneParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentBackbone = session.get(f'{Base_URL}GetBackboneParent?plasmidid={plasmidid}',cookies=request.COOKIES)
             print(plasmidParentBackbone.json())
-            plasmidParentPlasmid = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPlasmidParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentPlasmid = session.get(f'{Base_URL}GetPlasmidParent?plasmidid={plasmidid}',cookies=request.COOKIES)
             print(plasmidParentPlasmid.json())
-            plasmidSonPlasmid = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPlasmidSon?plasmidid={plasmidid}',cookies = request.COOKIES)
+            plasmidSonPlasmid = session.get(f'{Base_URL}GetPlasmidSon?plasmidid={plasmidid}',cookies = request.COOKIES)
 
             print(plasmidResponse.json())
             print(plasmidScar.json())
@@ -1672,32 +2014,48 @@ def plasmid_detail_show(request,plasmidid):
         return render(request,'error.html',{"error":str(exc)})
 
 def downloadPartMap(request, partid):
-    from .assembly_inputs import source_record
-    from .feature_records import normalized_record, genbank_text
-    obj, record = source_record('part', partid)
-    response = HttpResponse(genbank_text(normalized_record(record)), content_type='chemical/seq-na-genbank')
-    response['Content-Disposition'] = 'attachment; filename="' + _assembly_file_basename(obj.name) + '.gb"'
+    from .assembly_versions import source_record
+    from .feature_records import genbank_text
+    if request.method != 'GET':
+        raise LabDatabaseGETMethodException()
+    # Download the stored Part itself; flanking sites are added only for assembly.
+    response = HttpResponse(genbank_text(source_record('part', partid)), content_type='text/plain; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="part-%s.gbk"' % partid
     return response
         # return render(request,'error.html',{'error':exc.message})
 
 
 
 def downloadBackboneMap(request, backboneid):
-    from .assembly_inputs import source_record
-    from .feature_records import normalized_record, genbank_text
-    obj, record = source_record('backbone', backboneid)
-    response = HttpResponse(genbank_text(normalized_record(record)), content_type='chemical/seq-na-genbank')
-    response['Content-Disposition'] = 'attachment; filename="' + _assembly_file_basename(obj.name) + '.gb"'
+    from .assembly_versions import source_record
+    from .feature_records import genbank_text
+    if request.method != 'GET':
+        raise LabDatabaseGETMethodException()
+    response = HttpResponse(genbank_text(source_record('backbone', backboneid)), content_type='text/plain; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="backbone-%s.gbk"' % backboneid
     return response
     
     
     
 def downloadPlasmidMap(request, plasmidid):
-    from .assembly_inputs import source_record
-    from .feature_records import normalized_record, genbank_text
-    obj, record = source_record('plasmid', plasmidid)
-    response = HttpResponse(genbank_text(normalized_record(record)), content_type='chemical/seq-na-genbank')
-    response['Content-Disposition'] = 'attachment; filename="' + _assembly_file_basename(obj.name) + '.gb"'
+    from .assembly_versions import source_record, version_status, verified_version_text
+    from .feature_records import genbank_text
+    from WebDatabase.models import AssemblyResultVersion
+    if request.method != 'GET':
+        raise LabDatabaseGETMethodException()
+    version = AssemblyResultVersion.objects.filter(plasmid_id=plasmidid).first()
+    if version:
+        # Never replace a historical assembly with a reconstruction from new parents.
+        text = verified_version_text(version)
+        changed = version_status(version)
+    else:
+        text = genbank_text(source_record('plasmid', plasmidid))
+        changed = []
+    response = HttpResponse(text, content_type='text/plain; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="plasmid-%s.gbk"' % plasmidid
+    if version:
+        response['X-Assembly-Version'] = str(version.pk)
+        response['X-Reassembly-Required'] = 'true' if changed else 'false'
     return response
 
 def Remove_duplicated_Part(fetch_result):
@@ -1731,14 +2089,14 @@ def getplasmidAllParentPart(django_request, session, PlasmidParentPlasmid):
             PlasmidParentPlasmidQueue.put(each_plasmid['plasmidid'])
         while not PlasmidParentPlasmidQueue.empty():
             plasmidid = PlasmidParentPlasmidQueue.get()
-            ParentPartResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPartParent?plasmidid={plasmidid}",cookies = django_request.COOKIES)).json()
+            ParentPartResponse = (session.get(f"{Base_URL}GetPartParent?plasmidid={plasmidid}",cookies = django_request.COOKIES)).json()
             if(ParentPartResponse['success']):
                 for each_part in ParentPartResponse['data']:
-                    partSeqResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPartSeqByID?partid={each_part['partid']}",cookies=django_request.COOKIES)).json()
+                    partSeqResponse = (session.get(f"{Base_URL}GetPartSeqByID?partid={each_part['partid']}",cookies=django_request.COOKIES)).json()
                     if(partSeqResponse['success']):
                         partSeq = partSeqResponse['data']['level0sequence'].lower()
                         ParentPartList[each_part['name']] = partSeq
-            ParentPlasmidResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPlasmidParent?plasmidid={plasmidid}",cookies=django_request.COOKIES)).json()
+            ParentPlasmidResponse = (session.get(f"{Base_URL}GetPlasmidParent?plasmidid={plasmidid}",cookies=django_request.COOKIES)).json()
             if(ParentPlasmidResponse['success']):
                 for each_plasmid in ParentPlasmidResponse['data']:
                     PlasmidParentPlasmidQueue.put(each_plasmid['plasmidid'])
@@ -1753,13 +2111,13 @@ def getplasmidAllParentPart(django_request, session, PlasmidParentPlasmid):
 def delete_part(request):
     try:
         if(request.method == "POST"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
             partid = json.loads(request.body)["partid"]
-            delete_part_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}deletePart?partid={partid}", cookies = request.COOKIES)
+            delete_part_response = session.get(f"{Base_URL}deletePart?partid={partid}", cookies = request.COOKIES)
             if(delete_part_response.json()["success"] == False):
                 raise LabDatabaseException(message=delete_part_response.json()["message"])
                 # return JsonResponse(data = {"success":False, "message":delete_part_response.json()["message"]},status = 400, safe = False)
@@ -1771,21 +2129,21 @@ def delete_part(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 
 def delete_backbone(request):
     try:
         if(request.method == "POST"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
             backboneid = json.loads(request.body)["backboneid"]
             print(backboneid)
-            delete_backbone_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}deleteBackbone?backboneid={backboneid}", cookies = request.COOKIES)
+            delete_backbone_response = session.get(f"{Base_URL}deleteBackbone?backboneid={backboneid}", cookies = request.COOKIES)
             
             if(delete_backbone_response.json()["success"] == False):
                 print(delete_backbone_response.json())
@@ -1808,13 +2166,13 @@ def delete_backbone(request):
 def delete_plasmid(request):
     try:
         if(request.method == "POST"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
             plasmidid = json.loads(request.body)["Plasmidid"]
-            delete_plasmid_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}deletePlasmid?plasmidid={plasmidid}", cookies=request.COOKIES)
+            delete_plasmid_response = session.get(f"{Base_URL}deletePlasmid?plasmidid={plasmidid}", cookies=request.COOKIES)
             if(delete_plasmid_response.json()["success"] == False):
                 raise LabDatabaseException(message=delete_plasmid_response.json()["message"])
                 # return JsonResponse(data = {"success":False, "message":delete_plasmid_response.json()["message"]},status = 400, safe = False)
@@ -1826,19 +2184,19 @@ def delete_plasmid(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 def exportuserdata(request,username):
     try:
         if(request.method == "GET"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
             })
             if(username != None and username != ""):
                 excel_id = str(uuid.uuid4())
-                excel_address = output_file(settings.GENERATED_FILES_DIR, f"{username}-{excel_id}.xlsx")
+                excel_address = rf"{GENBANK_FIXED_OUTPUT_DIR}{username}-{excel_id}.xlsx"
                 # task_status = {
                 #     'status':'processing',
                 #     'progress':0,
@@ -1849,7 +2207,7 @@ def exportuserdata(request,username):
                 #     'file_id':f"{username}-{excel_id}"
                 # }
                 cache_obj = CacheClass("processing",0)
-                set_task_status(f'{TASK_STATUS_PREFIX}{excel_id}', cache_obj)
+                cache.set(f'{TASK_STATUS_PREFIX}{excel_id}',cache_obj,timeout=3600)
                 thread = threading.Thread(
                     target = exportuserdataprocess,
                     args=(request, session, excel_id,username)
@@ -1866,7 +2224,7 @@ def exportuserdata(request,username):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
             
             
         # if(os.path.exists(excel_address)):
@@ -1881,12 +2239,12 @@ def exportuserdata(request,username):
 def exportuserdataprocess(request,session,task_id,username):
     try:
         # excel_address = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')['file_address']
-        excel_address = output_file(settings.GENERATED_FILES_DIR, f"{username}-{task_id}.xlsx")
+        excel_address = rf"{GENBANK_FIXED_OUTPUT_DIR}{username}-{task_id}.xlsx"
         excel_part_data = {}
-        part_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}partfields",cookies=request.COOKIES)).json()['data']
+        part_field = (session.get(f"{Base_URL}partfields",cookies=request.COOKIES)).json()['data']
         for each_field in part_field:
             excel_part_data[each_field] = []
-        part_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}partlistbyuser/{username}", cookies=request.COOKIES)
+        part_result = session.get(f"{Base_URL}partlistbyuser/{username}", cookies=request.COOKIES)
         if(part_result.json()["success"]):
             part_data = part_result.json()['data']
             for each_data in part_data:
@@ -1897,10 +2255,10 @@ def exportuserdataprocess(request,session,task_id,username):
 
 
         excel_backbone_data = {}
-        backbone_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}backbonefields",cookies=request.COOKIES)).json()['data']
+        backbone_field = (session.get(f"{Base_URL}backbonefields",cookies=request.COOKIES)).json()['data']
         for each_field in backbone_field:
             excel_backbone_data[each_field] = []
-        backbone_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}backbonelistbyuser/{username}", cookies=request.COOKIES)
+        backbone_result = session.get(f"{Base_URL}backbonelistbyuser/{username}", cookies=request.COOKIES)
         if(backbone_result.json()["success"]):
             backbone_data = backbone_result.json()['data']
             for each_data in backbone_data:
@@ -1912,10 +2270,10 @@ def exportuserdataprocess(request,session,task_id,username):
 
 
         excel_plasmid_data = {}
-        plasmid_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}plasmidfields",cookies=request.COOKIES)).json()['data']
+        plasmid_field = (session.get(f"{Base_URL}plasmidfields",cookies=request.COOKIES)).json()['data']
         for each_field in plasmid_field:
             excel_plasmid_data[each_field] = []
-        plasmid_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}plasmidlistbyuser/{username}", cookies=request.COOKIES)
+        plasmid_result = session.get(f"{Base_URL}plasmidlistbyuser/{username}", cookies=request.COOKIES)
         if(plasmid_result.status_code == 200):
             plasmid_data = plasmid_result.json()['data']
             for each_data in plasmid_data:
@@ -1934,7 +2292,7 @@ def exportuserdataprocess(request,session,task_id,username):
         cache_obj.setStatus("completed")
         cache_obj.setProgress(100)
         cache_obj.setMessage(excel_address)
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj)
         
         
         # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=3600)
@@ -1944,19 +2302,19 @@ def exportuserdataprocess(request,session,task_id,username):
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(exc.message())
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
     except Exception as exc:
         with TASK_STATUS_LOCK:
             cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(exc.message())
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
     
 def ExportAllData(request):
     try:
         if(request.method == "GET"):
-            session = ServiceSession()
+            session = requests.Session()
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
                 'Content-Type':'application/json',
@@ -1964,7 +2322,7 @@ def ExportAllData(request):
             excel_id = str(uuid.uuid4())
             
             cache_obj = CacheClass("processing",0)
-            set_task_status(f'{TASK_STATUS_PREFIX}{excel_id}', cache_obj)
+            cache.set(f'{TASK_STATUS_PREFIX}{excel_id}',cache_obj,timeout=3600)
             thread = threading.Thread(
                 target = ExportAllDataProcess,
                 args=(request, session, excel_id)
@@ -1979,7 +2337,7 @@ def ExportAllData(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
     
     
     
@@ -1987,18 +2345,18 @@ def ExportAllDataProcess(request, session, task_id):
     try:
         # excel_address = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')['file_address']
         # print(excel_address)
-        # excel_address = f"{settings.GENERATED_FILES_DIR}{task_id}.xlsx"
-        excel_address = output_file(settings.GENERATED_FILES_DIR,f"{task_id}.xlsx")
+        # excel_address = f"{GENBANK_FIXED_OUTPUT_DIR}{task_id}.xlsx"
+        excel_address = os.path.join(GENBANK_FIXED_OUTPUT_DIR,f"{task_id}.xlsx")
         print(excel_address)
-        userlist = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserlist",cookies=request.COOKIES)).json()['data']
+        userlist = (session.get(f"{Base_URL}getuserlist",cookies=request.COOKIES)).json()['data']
         print(userlist)
         for each_user in userlist:
             print(each_user)
             excel_part_data = {}
-            part_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}partfields",cookies=request.COOKIES)).json()['data']
+            part_field = (session.get(f"{Base_URL}partfields",cookies=request.COOKIES)).json()['data']
             for each_field in part_field:
                 excel_part_data[each_field] = []
-            part_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}partlistbyuser/{each_user['uname']}", cookies=request.COOKIES)
+            part_result = session.get(f"{Base_URL}partlistbyuser/{each_user['uname']}", cookies=request.COOKIES)
             print(part_result)
             if(part_result.status_code == 200):
                 part_data = part_result.json()['data']
@@ -2009,10 +2367,10 @@ def ExportAllDataProcess(request, session, task_id):
             
             
             excel_backbone_data = {}
-            backbone_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}backbonefields",cookies=request.COOKIES)).json()['data']
+            backbone_field = (session.get(f"{Base_URL}backbonefields",cookies=request.COOKIES)).json()['data']
             for each_field in backbone_field:
                 excel_backbone_data[each_field] = []
-            backbone_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}backbonelistbyuser/{each_user['uname']}", cookies=request.COOKIES)
+            backbone_result = session.get(f"{Base_URL}backbonelistbyuser/{each_user['uname']}", cookies=request.COOKIES)
             print(backbone_result)
             if(backbone_result.status_code == 200):
                 backbone_data = backbone_result.json()['data']
@@ -2024,10 +2382,10 @@ def ExportAllDataProcess(request, session, task_id):
 
 
             excel_plasmid_data = {}
-            plasmid_field = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}plasmidfields",cookies=request.COOKIES)).json()['data']
+            plasmid_field = (session.get(f"{Base_URL}plasmidfields",cookies=request.COOKIES)).json()['data']
             for each_field in plasmid_field:
                 excel_plasmid_data[each_field] = []
-            plasmid_result = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}plasmidlistbyuser/{each_user['uname']}", cookies=request.COOKIES)
+            plasmid_result = session.get(f"{Base_URL}plasmidlistbyuser/{each_user['uname']}", cookies=request.COOKIES)
             print(plasmid_result)
             if(plasmid_result.status_code == 200):
                 plasmid_data = plasmid_result.json()['data']
@@ -2057,14 +2415,8 @@ def ExportAllDataProcess(request, session, task_id):
         cache_obj.setStatus("completed")
         cache_obj.setProgress(100)
         cache_obj.setMessage(excel_address)
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
         print("completed")
-        print("\n")
-        print("\n")
-        print("\n")
-        print("\n")
-        print("\n")
-        print("\n")
         # task_status['status'] = "completed"
         # task_status['progress'] = 100
         # cache.set(f'{TASK_STATUS_PREFIX}{task_id}',task_status, timeout=3600)
@@ -2076,21 +2428,21 @@ def ExportAllDataProcess(request, session, task_id):
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(exc.message)
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
     except Exception as exc:
         with TASK_STATUS_LOCK:
             cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')
             cache_obj.setStatus("failed")
             cache_obj.setProgress(100)
             cache_obj.setMessage(str(exc))
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
 
 
 def getDocument(request, fileid):
     try:
         if(request.method == "GET"):
-            # file_address = output_file(settings.GENERATED_FILES_DIR, f"{fileid}.xlsx")
-            file_address = output_file(settings.GENERATED_FILES_DIR,f"{fileid}.xlsx")
+            # file_address = rf"{GENBANK_FIXED_OUTPUT_DIR}{fileid}.xlsx"
+            file_address = os.path.join(GENBANK_FIXED_OUTPUT_DIR,f"{fileid}.xlsx")
             if(os.path.exists(file_address)):
                 response = FileResponse(open(file_address,'rb'),as_attachment=True)
                 return response
@@ -2118,19 +2470,31 @@ def getDocumentByAddress(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 def getAssemblyFile(request, fileName):
+    from WebDatabase.models import AssemblyResultVersion
+    from .assembly_versions import verified_version_text
+    from django.db.models import Q
+    task_id = request.GET.get('task_id')
+    if task_id:
+        version = AssemblyResultVersion.objects.filter(task_id=task_id).filter(
+            Q(record__name=fileName) | Q(record__id=fileName)).first()
+        if version:
+            response = HttpResponse(verified_version_text(version), content_type='text/plain; charset=utf-8')
+            response['Content-Disposition'] = 'attachment; filename="assembly.gb"'
+            return response
+
     try:
         if(request.method == "GET"):
             task_id = request.GET.get("task_id")
             if task_id:
                 file_address = _resolve_task_assembly_file(task_id, fileName)
             else:
-                file_address = os.path.join(settings.ASSEMBLY_OUTPUT_DIR,f"{fileName}.gb")
+                file_address = os.path.join(Assembly_File_Address,f"{fileName}.gb")
             if(os.path.exists(file_address)):
-                copy_address = output_file(settings.ASSEMBLY_INPUT_DIR,f"{fileName}.gbk")
+                copy_address = os.path.join(ASSEMBLY_DIR,f"{fileName}.gbk")
                 shutil.copy(file_address,copy_address)
                 response = FileResponse(open(file_address,'rb'),as_attachment=True)
                 return response
@@ -2142,7 +2506,7 @@ def getAssemblyFile(request, fileName):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 def getAssemblyArchive(request, task_id):
@@ -2166,11 +2530,16 @@ def getAssemblyArchive(request, task_id):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 def _create_api_session():
-    session = ServiceSession()
+    class AssemblyApiSession(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs.setdefault("timeout", ASSEMBLY_HTTP_TIMEOUT)
+            return super().request(method, url, **kwargs)
+
+    session = AssemblyApiSession()
     session.headers.update({
         'User-Agent':'Django-App/1.0',
         'Content-Type':'application/json',
@@ -2227,14 +2596,14 @@ def _generate_plasmid_map_from_parents(session, django_request, plasmid_id, sequ
     try:
         scar_list = scarPosition(sequence)
         seq_reverse = str(Seq(sequence).reverse_complement())
-        PlasmidParentBackboneResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetBackboneParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
+        PlasmidParentBackboneResponse = (session.get(f"{Base_URL}GetBackboneParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
         sa = SequenceAnnotator(sequence,{},{},scar_list,name=output_name)
         if(PlasmidParentBackboneResponse['success']):
             PlasmidParentBackbone = PlasmidParentBackboneResponse['data'][0]['id']
-            ParentBackboneSequenceResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetBackboneSeqByID?backboneid={PlasmidParentBackbone}", cookies=django_request.COOKIES)).json()
+            ParentBackboneSequenceResponse = (session.get(f"{Base_URL}GetBackboneSeqByID?backboneid={PlasmidParentBackbone}", cookies=django_request.COOKIES)).json()
             if(ParentBackboneSequenceResponse['success']):
                 ParentBackboneSequence = ParentBackboneSequenceResponse['data']['sequence']
-                BackboneFeatureListResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetBackboneFeature/{PlasmidParentBackbone}", cookies=django_request.COOKIES)).json()
+                BackboneFeatureListResponse = (session.get(f"{Base_URL}GetBackboneFeature/{PlasmidParentBackbone}", cookies=django_request.COOKIES)).json()
                 if(BackboneFeatureListResponse['success']):
                     backbone_fetch_kmer = KmerIndex()
                     for each_feature in BackboneFeatureListResponse['data']:
@@ -2256,23 +2625,23 @@ def _generate_plasmid_map_from_parents(session, django_request, plasmid_id, sequ
                     reverse_feature_list = fi.featureMatch(seq_reverse)
                     sa.add_features(feature_list)
                     sa.add_reverse_features(reverse_feature_list)
-        PlasmidParentPartResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPartParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
+        PlasmidParentPartResponse = (session.get(f"{Base_URL}GetPartParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
         Part_fetch_kmer = KmerIndex()
         if(PlasmidParentPartResponse['success']):
             PlasmidParentPart = PlasmidParentPartResponse['data']
             for each_part in PlasmidParentPart:
-                partSeqResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPartSeqByID?partid={each_part['partid']}",cookies=django_request.COOKIES)).json()
+                partSeqResponse = (session.get(f"{Base_URL}GetPartSeqByID?partid={each_part['partid']}",cookies=django_request.COOKIES)).json()
                 if(partSeqResponse['success']):
                     partSeq = partSeqResponse['data']['level0sequence']
                     Part_fetch_kmer.add_sequence(each_part['name'],partSeq)
             fetch_result = Part_fetch_kmer.query(sequence)
             for each_key in fetch_result:
-                typeResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}TypeByName?name={each_key}",cookies=django_request.COOKIES))
+                typeResponse = (session.get(f"{Base_URL}TypeByName?name={each_key}",cookies=django_request.COOKIES))
                 if(typeResponse.status_code == 200):
                     feature_type = typeResponse.json()['Type'].lower()
                     new_feature = {each_key:[fetch_result[each_key]['start'],fetch_result[each_key]['end'],feature_type]}
                     sa.add_feature(new_feature)
-        PlasmidParentPlasmidResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}GetPlasmidParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
+        PlasmidParentPlasmidResponse = (session.get(f"{Base_URL}GetPlasmidParent?plasmidid={plasmid_id}",cookies=django_request.COOKIES)).json()
         plasmid_fetch_kmer = KmerIndex()
         if(PlasmidParentPlasmidResponse['success']):
             PlasmidParentPlasmid = PlasmidParentPlasmidResponse['data']
@@ -2281,7 +2650,7 @@ def _generate_plasmid_map_from_parents(session, django_request, plasmid_id, sequ
                 plasmid_fetch_kmer.add_sequence(each_part,ParentPartList[each_part])
             fetch_result = plasmid_fetch_kmer.query(sequence)
             for each_key in fetch_result.keys():
-                typeResponse = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}TypeByName?name={each_key}",cookies=django_request.COOKIES))
+                typeResponse = (session.get(f"{Base_URL}TypeByName?name={each_key}",cookies=django_request.COOKIES))
                 if(typeResponse.status_code == 200):
                     feature_type = typeResponse.json()['Type'].lower()
                     new_feature = {each_key:[fetch_result[each_key]["start"],fetch_result[each_key]["end"],feature_type]}
@@ -2292,7 +2661,7 @@ def _generate_plasmid_map_from_parents(session, django_request, plasmid_id, sequ
             reverse_feature_list = fi.featureMatch(seq_reverse)
             sa.add_features(feature_list)
             sa.add_reverse_features(reverse_feature_list)
-        sa.GenerateGBKFile(settings.ASSEMBLY_INPUT_DIR)
+        sa.GenerateGBKFile(ASSEMBLY_DIR)
     except LabDatabaseException as exc:
         raise exc
     except Exception as exc:
@@ -2323,76 +2692,123 @@ def _run_assembly_simulation(file_address_list, file_name_list, assembly_name, t
         # cache_obj.setMessage(str(exc))
         # cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
 
-def _finalize_assembly_result(django_request, task_id, assembly_result_file, final_name,
-        part, backbone, plasmid, output_dir, alias='', Note='', Level=None, publish_task_result=True):
-    from .feature_records import read_genbank, normalized_record, write_record, feature_rows
+def _finalize_assembly_result(django_request, task_id, assembly_result_file, final_name, part, backbone, plasmid, output_dir, alias='', Note='', Level=None, publish_task_result=True):
+    from pathlib import Path
+    from .feature_records import read_genbank, normalized_record, write_record, feature_rows, atomic_write
+    from .assembly_versions import save_version
+    from .assembly_tasks import update
+    from WebDatabase.models import Plasmidneed
     record = normalized_record(read_genbank(assembly_result_file))
+    # Rewrite before publishing; group metadata and unknown strands survive reload.
     write_record(assembly_result_file, record)
-    response = AssemblyResultUpload(django_request, final_name[:20], str(record.seq), part,
-        backbone, plasmid, alias, Note, Level, features=feature_rows(record))
+    update(task_id, phase='persisting')
+    response = AssemblyResultUpload(django_request, final_name[:20], str(record.seq), part, backbone,
+        plasmid, alias, Note, Level, features=feature_rows(record))
     if not response.get('success'):
         raise ValueError(response.get('message') or 'Assembly persistence failed')
+    obj = Plasmidneed.objects.get(name=final_name[:20])
+    source_file = Path(output_dir) / 'input_sources.json'
+    sources = json.loads(source_file.read_text(encoding='utf-8')) if source_file.exists() else []
+    version = save_version(obj.pk, task_id, record, sources)
+    # The stored text is the exact same text returned by downloadPlasmidMap.
+    atomic_write(assembly_result_file, version.genbank)
     result = _build_task_result_payload(task_id, final_name)
-    result.update(plasmid_id=response['plasmid_id'], level=response['level'])
+    result['version_id'] = str(version.pk)
+    result['plasmid_id'] = obj.pk
     if publish_task_result:
         cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')
         cache_obj.setStatus('completed'); cache_obj.setProgress(100)
         cache_obj.setResult(result); cache_obj.setMessage('组装完成')
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
+        update(task_id, status='completed', phase='completed', progress=100, success=True, result=result, message='组装完成')
     return result
 
 
 
 def AssemblyRepo(request):
+    from .assembly_tasks import register, update
+    if request.method != 'POST':
+        raise LabDatabasePOSTMethodException()
+    data = json.loads(request.body)
+    name = data.get('repositoryName', '').strip()
+    if not name:
+        return JsonResponse({'success': False, 'message': 'repositoryName is required'}, status=400)
+    task, created = register(request, name, 'assemble', data.get('request_id'))
+    if not created:
+        return JsonResponse(dict(task.state, task_id=task.pk, reused=True, execution_mode='assemble'))
+    cache.set(f'{TASK_STATUS_PREFIX}{task.pk}', CacheClass('processing', 0), timeout=3600)
     try:
-        if(request.method == "POST"):
-            data = json.loads(request.body)
-            repositoryName = data['repositoryName']
-            if(repositoryName == ""):
-                raise LabDatabaseException(message = f"参数{repositoryName}不能为空")
-            task_id = str(uuid.uuid4())
-            # task_status = {
-            #     'status':'processing',
-            #     'progress':0,
-            #     'result':None,
-            #     'error':None,
-            # }
-            cache_obj = CacheClass("processing",0)
-            set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
-            thread = threading.Thread(
-                target=process_assembly_repo_async,
-                args=(repositoryName,request,task_id)
-            )
-            thread.daemon = False
-            thread.start()
-            return JsonResponse({"task_id":task_id,'status':'processing','message':"正在组装..."},status=200,safe=False)
-        else:
-            return LabDatabasePOSTMethodException()
-    except LabDatabaseException as exc:
-        return exc.to_response()
-    except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        ASSEMBLY_EXECUTOR.submit(process_assembly_repo_async, name, request, task.pk)
+    except queue.Full:
+        update(task.pk, status='failed', phase='failed', message='Assembly queue is full')
+        return JsonResponse({'success': False, 'task_id': task.pk, 'message': 'Assembly queue is full'}, status=429)
+    return JsonResponse({'task_id': task.pk, 'status': 'processing', 'execution_mode': 'assemble'})
 
 
     
-def _assemble_repository(repositoryName, django_request, task_id, publish=True):
-    from .assembly_inputs import prepare_inputs
+def _assemble_repository(repositoryName, django_request, task_id, publish=True, repository_payload=None):
+    from pathlib import Path
+    from Bio.Seq import Seq
+    from Bio.SeqRecord import SeqRecord
+    from .feature_records import normalized_record, write_record, atomic_write
+    from .assembly_versions import source_record, source_stamp, source_models, attach_source
+    from .assembly_tasks import update
     session = _create_api_session()
-    response = session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}getrepo', json={'Name': repositoryName}, cookies=django_request.COOKIES)
-    response.raise_for_status()
-    payload = response.json()
+    if repository_payload is None:
+        response = session.post(f'{Base_URL}getrepo', json={'Name': repositoryName}, cookies=django_request.COOKIES)
+        response.raise_for_status()
+        payload = response.json()
+    else:
+        payload = repository_payload
     if not payload.get('success'):
         raise ValueError('Repository not found: ' + repositoryName)
     data = payload['data']
-    output = _ensure_task_assembly_output_dir(task_id, repositoryName)
-    files, names, enzyme = prepare_inputs(data, output, _determine_target_enzyme,
-                                         __process_part_sequence, _assembly_file_basename)
-    _run_assembly_simulation(files, names, repositoryName, output, task_id, enzyme)
-    return _finalize_assembly_result(django_request, task_id,
-        os.path.join(output, repositoryName + '.gb'), repositoryName,
-        data.get('parts', []), data.get('backbones', []), data.get('plasmids', []), output,
-        payload.get('alias', data.get('alias')) or '', payload.get('note', data.get('note')) or '',
-        payload.get('level', data.get('level')), publish_task_result=publish)
+    if not any(data.get(key) for key in ('backbones', 'parts', 'plasmids')):
+        raise ValueError(f'组装“{repositoryName}”没有输入元件，请先添加骨架、part 或质粒后重试')
+    output = Path(_ensure_task_assembly_output_dir(task_id, repositoryName))
+    inputs = output / 'inputs'
+    inputs.mkdir(exist_ok=True)
+    enzyme = ''
+    files, names, sources = [], [], []
+    # Determine the assembly enzyme from the actual current backbone sequence.
+    for ident in data['backbones']:
+        enzyme = _determine_target_enzyme(str(source_record('backbone', ident).seq).lower())
+    if not enzyme:
+        raise ValueError(f'组装“{repositoryName}”无法确定组装酶，请检查是否已添加骨架及骨架的酶切位点')
+    for kind, ids in [('backbone', data['backbones']), ('part', data['parts']), ('plasmid', data['plasmids'])]:
+        for index, ident in enumerate(ids):
+            stamp = source_stamp(kind, ident)
+            record = source_record(kind, ident)
+            obj = source_models(kind)[0].objects.get(pk=ident)
+            if kind == 'part':
+                part_type = session.get(f'{Base_URL}TypeByID?ID={ident}', cookies=django_request.COOKIES).json()['Type'].lower()
+                starts, ends = data.get('part_start_scar') or [], data.get('part_end_scar') or []
+                raw = str(record.seq).lower()
+                sequence = __process_part_sequence(raw, part_type, enzyme,
+                    {'source': obj.sourceorganism or ''}, obj.alias or '', obj.name,
+                    starts[index] if index < len(starts) else '', ends[index] if index < len(ends) else '')
+                offset = sequence.lower().find(raw)
+                if offset < 0:
+                    raise ValueError('Part processing changed the source sequence: ' + obj.name)
+                attach_source(record, kind, ident, obj.name, getattr(obj, 'level', None))
+                for feature in record.features:
+                    feature.location = feature.location + offset
+                record.seq = Seq(sequence)
+            else:
+                attach_source(record, kind, ident, obj.name, getattr(obj, 'level', None))
+            # This is a new file in this task's input directory, never a name cache.
+            name = _assembly_file_basename(f'{kind}-{ident}-{obj.name}')
+            record.id = record.name = name
+            path = inputs / (name + '.gb')
+            write_record(path, normalized_record(record))
+            files.append(str(path)); names.append(name); sources.append(stamp)
+    atomic_write(output / 'input_sources.json', json.dumps(sources, ensure_ascii=False))
+    update(task_id, phase='assembling')
+    _run_assembly_simulation(files, names, repositoryName, str(output), task_id, enzyme)
+    return _finalize_assembly_result(django_request, task_id, str(output / (repositoryName + '.gb')),
+        repositoryName, data['parts'], data['backbones'], data['plasmids'], str(output),
+        payload.get('alias') or '', payload.get('note') or '', payload.get('level'),
+        publish_task_result=publish)
 
 #循环组装调用
 def process_assembly_repo(repositoryName, django_request,task_id):
@@ -2413,21 +2829,20 @@ def process_assembly_repo(repositoryName, django_request,task_id):
         # cache.set(f"{TASK_STATUS_PREFIX}{task_id}",cache_obj)
 
 #单个调用
-def process_assembly_repo_async(repositoryName, django_request,task_id):
+def process_assembly_repo_async(repositoryName, django_request, task_id):
+    from .assembly_tasks import update
+    from django.db import close_old_connections
+    close_old_connections()
     try:
-        _assemble_repository(repositoryName, django_request, task_id,publish=True)
-    except LabDatabaseException as exc:
-        cache_obj = cache.get(f"{TASK_STATUS_PREFIX}{task_id}")
-        cache_obj.setStatus("failed")
-        cache_obj.setProgress(100)
-        cache_obj.setMessage(exc.message)
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        _assemble_repository(repositoryName, django_request, task_id, publish=True)
     except Exception as exc:
-        cache_obj = cache.get(f"{TASK_STATUS_PREFIX}{task_id}")
-        cache_obj.setStatus("failed")
-        cache_obj.setProgress(100)
-        cache_obj.setMessage(str(exc))
-        set_task_status(f"{TASK_STATUS_PREFIX}{task_id}", cache_obj)
+        message = getattr(exc, 'message', str(exc))
+        obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}') or CacheClass('processing', 0)
+        obj.setStatus('failed'); obj.setProgress(100); obj.setMessage(message)
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}', obj)
+        update(task_id, status='failed', phase='failed', progress=100, success=False, message=message)
+    finally:
+        close_old_connections()
                         
 def AssemblyWithoutRepo(request):
     try:
@@ -2437,6 +2852,8 @@ def AssemblyWithoutRepo(request):
             partList = data.get('part')
             backboneList = data.get('backbone')
             plasmidList = data.get('plasmid')
+            scarList = data.get("scar",[])
+            print(scarList)
             task_id = str(uuid.uuid4())
             cache_obj = CacheClass("processing",0)
             # cache_obj = CacheClass("processing",0)
@@ -2447,13 +2864,24 @@ def AssemblyWithoutRepo(request):
             #     'result':None,
             #     'error':None,
             # }
-            set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
-            thread = threading.Thread(
-                target=process_assembly_without_repo,
-                args=(partList, backboneList, plasmidList,request,task_id,plan_name)
-            )
-            thread.daemon = False
-            thread.start()
+            cache.set(f'{TASK_STATUS_PREFIX}{task_id}',cache_obj,timeout=100000)
+            try:
+                ASSEMBLY_EXECUTOR.submit(
+                    process_assembly_without_repo,
+                    partList,
+                    backboneList,
+                    plasmidList,
+                    scarList,
+                    request,
+                    task_id,
+                    plan_name,
+                )
+            except queue.Full:
+                cache.delete(f'{TASK_STATUS_PREFIX}{task_id}')
+                return JsonResponse(
+                    {"success": False, "message": "当前组装任务过多，请稍后重试"},
+                    status=429,
+                )
             return JsonResponse({"task_id":task_id,'status':'processing','message':"正在组装..."},status=200,safe=False)
         else:
             raise LabDatabasePOSTMethodException()
@@ -2461,36 +2889,34 @@ def AssemblyWithoutRepo(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
-def process_assembly_without_repo(partList, backboneList, plasmidList, django_request, task_id, plan_name):
-    from WebDatabase.models import Backbonetable, Plasmidneed
-    from .assembly_inputs import prepare_inputs
-    from django.db import close_old_connections
-    close_old_connections()
+def process_assembly_without_repo(partList, backboneList, plasmidList, scarList, django_request, task_id, plan_name):
+    from WebDatabase.models import Parttable, Backbonetable, Plasmidneed, AssemblyTask
+    from .assembly_tasks import update
     try:
-        data = {'parts': partList or [],
-                'backbones': [Backbonetable.objects.get(name=name).pk for name in (backboneList or [])],
-                'plasmids': [Plasmidneed.objects.get(name=name[:20]).pk for name in (plasmidList or [])]}
-        output = _ensure_task_output_dir(task_id)
-        files, names, enzyme = prepare_inputs(data, output, _determine_target_enzyme,
-                                             __process_part_sequence, _assembly_file_basename)
-        _run_assembly_simulation(files, names, plan_name, output, task_id, enzyme)
-        _finalize_assembly_result(django_request, task_id, _get_task_assembly_file(task_id, plan_name),
-            plan_name, data['parts'], data['backbones'], data['plasmids'], output)
+        AssemblyTask.objects.get_or_create(pk=task_id, defaults={'owner_id': str((django_request.session.get('info') or {}).get('uid', '')),
+            'target': plan_name, 'state': {'status': 'processing', 'phase': 'queued', 'progress': 0}})
+        data = {'parts': [Parttable.objects.get(pk=value).pk for value in partList],
+                'backbones': [Backbonetable.objects.get(name=value).pk for value in backboneList],
+                'plasmids': [Plasmidneed.objects.get(name=value).pk for value in plasmidList],
+                'part_start_scar': [s[0] for s in scarList], 'part_end_scar': [s[1] for s in scarList]}
+        return _assemble_repository(plan_name, django_request, task_id,
+            repository_payload={'success': True, 'data': data})
     except Exception as exc:
-        cache_obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}')
-        cache_obj.setStatus('failed'); cache_obj.setProgress(100)
-        cache_obj.setMessage(getattr(exc, 'message', str(exc)))
-        set_task_status(f'{TASK_STATUS_PREFIX}{task_id}', cache_obj)
-    finally:
-        close_old_connections()
+        message = getattr(exc, 'message', str(exc))
+        obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}') or CacheClass('processing', 0)
+        obj.setStatus('failed'); obj.setProgress(100); obj.setMessage(message)
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}', obj)
+        update(task_id, status='failed', phase='failed', progress=100, success=False, message=message)
         
         
         
         
 def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias,partName,part_start_scar="",part_end_scar=""):
     try:
+        # Remove pasted whitespace before adding scars or calculating coordinates.
+        sequence = "".join(sequence.split())
         original_sequence = sequence
         if(target_enzyme != ""):
             if(target_enzyme == "BbsI"):
@@ -2507,10 +2933,11 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 sequence = "GAAGACCTA" + sequence
                             else:
                                 sequence = "GAAGACCTAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGGTCTTC"
-                            else:
-                                sequence = sequence + "TAAAAGGTCTTC"
+                            sequence = sequence + "TAAAAGGTCTTC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGGTCTTC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGGTCTTC"
                     elif "plant" in partSource['source'].lower():
                         if(partType == "promoter"):
                             sequence = "GAAGACCTTTTT" + sequence + "TATTAGGTCTTC"
@@ -2522,14 +2949,15 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 # sequence = "GAAGACCTA" + sequence + "TAAAAGGTCTTC"
                             else:
                                 sequence = "GAAGACCTAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGGTCTTC"
-                            else:
-                                sequence = sequence + "TAAAAGGTCTTC"
+                            sequence = sequence + "TAAAAGGTCTTC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGGTCTTC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGGTCTTC"
                                 # sequence = "GAAGACCTAATG" + sequence + "TAAAAGGTCTTC"
                         elif(partType == "rbs"):
                                 #TODO: 澶勭悊Overlapping鐨勯棶棰?
-                            # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                            # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                             #鍋囪Lac搴忓垪鍦ㄥ簭鍒椾腑
                             if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                                 sequence = "GAAGACCTTATT" + sequence
@@ -2563,14 +2991,15 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 # sequence = "GAAGACCTA" + sequence + "TAAAAGGTCTTC"
                             else:
                                 sequence = "GAAGACCTAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGGTCTTC"
-                            else:
-                                sequence = sequence + "TAAAAGGTCTTC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGGTCTTC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGGTCTTC"
+                            sequence = sequence + "TAAAAGGTCTTC"
                                 # sequence = "GAAGACCTAATG" + sequence + "TAAAAGGTCTTC"
                         elif(partType == "rbs"):
                                 #TODO: 澶勭悊Overlapping鐨勯棶棰?
-                            # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                            # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                             #鍋囪Lac搴忓垪鍦ㄥ簭鍒椾腑
                             if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                                 sequence = "GAAGACCTATCA" + sequence
@@ -2621,10 +3050,11 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 sequence = "GGTCTCAA" + sequence
                             else:
                                 sequence = "GGTCTCAAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGAGACC"
-                            else:
-                                sequence = sequence + "TAAAAGAGACC"
+                            sequence = sequence + "TAAAAGAGACC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGAGACC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGAGACC"
                     elif "plant" in partSource['source'].lower():
                         if(partType == "promoter"):
                             sequence = "GGTCTCATTTT" + sequence + "TATTAGAGACC"
@@ -2635,12 +3065,13 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 sequence = "GGTCTCAA" + sequence
                             else:
                                 sequence = "GGTCTCAAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGAGACC"
-                            else:
-                                sequence = sequence + "TAAAAGAGACC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGAGACC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGAGACC"
+                            sequence = sequence + "TAAAAGAGACC"
                         elif(partType == "rbs"):
-                            # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                            # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                             if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                                 sequence = "GGTCTCATATT" + sequence
                                 if(sequence[-2:] == "aa"):
@@ -2672,12 +3103,13 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                                 sequence = "GGTCTCAA" + sequence
                             else:
                                 sequence = "GGTCTCAAATG" + sequence
-                            if(sequence[-3:] == "taa"):
-                                sequence = sequence + "AAGAGACC"
-                            else:
-                                sequence = sequence + "TAAAAGAGACC"
+                            # if(sequence[-3:] == "taa"):
+                            #     sequence = sequence + "AAGAGACC"
+                            # else:
+                            #     sequence = sequence + "TAAAAGAGACC"
+                            sequence = sequence + "TAAAAGAGACC"
                         elif(partType == "rbs"):
-                            # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                            # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                             if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                                 sequence = "GGTCTCAATCA" + sequence
                                 if(sequence[-2:] == "aa"):
@@ -2727,10 +3159,11 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                             sequence = "GAAGACCTA" + sequence
                         else:
                             sequence = "GAAGACCTAATG" + sequence
-                        if(sequence[-3:] == "taa"):
-                            sequence = sequence + "AAGGTCTTC"
-                        else:
-                            sequence = sequence + "TAAAAGGTCTTC"
+                        # if(sequence[-3:] == "taa"):
+                        #     sequence = sequence + "AAGGTCTTC"
+                        # else:
+                        #     sequence = sequence + "TAAAAGGTCTTC"
+                        sequence = sequence + "TAAAAGGTCTTC"
                 elif "plant" in partSource['source'].lower():
                     if(partType == "promoter"):
                         sequence = "GAAGACCTTTTT" + sequence + "TATTAGGTCTTC"
@@ -2741,12 +3174,13 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                             sequence = "GAAGACCTA" + sequence
                         else:
                             sequence = "GAAGACCTAATG" + sequence
-                        if sequence[-3:] == "taa":
-                            sequence = sequence + "AAGGTCTTC"
-                        else:
-                            sequence = sequence + "TAAAAGGTCTTC"
+                        # if sequence[-3:] == "taa":
+                        #     sequence = sequence + "AAGGTCTTC"
+                        # else:
+                        #     sequence = sequence + "TAAAAGGTCTTC"
+                        sequence = sequence + "TAAAAGGTCTTC"
                     elif(partType == "rbs"):
-                        # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                        # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                         if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                             sequence = "GAAGACCTTATT" + sequence
                             if(sequence[-2:] == "aa"):
@@ -2778,12 +3212,13 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
                             sequence = "GAAGACCTA" + sequence
                         else:
                             sequence = "GAAGACCTAATG" + sequence
-                        if sequence[-3:] == "taa":
-                            sequence = sequence + "AAGGTCTTC"
-                        else:
-                            sequence = sequence + "TAAAAGGTCTTC"
+                        # if sequence[-3:] == "taa":
+                        #     sequence = sequence + "AAGGTCTTC"
+                        # else:
+                        #     sequence = sequence + "TAAAAGGTCTTC"
+                        sequence = sequence + "TAAAAGGTCTTC"
                     elif(partType == "rbs"):
-                        # partAlias = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
+                        # partAlias = (session.get(f"{Base_URL}PartAliasByID?ID={each_part}",cookies=django_request.COOKIES)).json()["PartAlias"]
                         if(("AATTAAATTAATTGTGAGCGGATAACAATT".lower() in sequence) == True):
                             sequence = "GAAGACCTATCA" + sequence
                             if(sequence[-2:] == "aa"):
@@ -2846,46 +3281,98 @@ def __process_part_sequence(sequence,partType,target_enzyme,partSource,partAlias
     
 
 
-def AssemblyResultUpload(django_request, Name, Sequence, partList, BackboneList, PlasmidList,
-                         alias='', Note='', Level=None, features=None):
-    if features is None:
-        raise ValueError('Assembly result annotations are required')
-    labels = FittingLabels(Sequence)
-    scars = scarFunction(Sequence)
-    payload = {'name': Name, 'sequence': Sequence, 'alias': alias, 'note': Note, 'level': Level,
-        'parts': partList, 'backbones': BackboneList, 'plasmids': PlasmidList,
-        'assembly_features': features,
-        'culture': {'ori': [value['Name'] for value in labels['Origin']],
-                    'marker': [value['Name'] for value in labels['Marker']]},
-        'scars': dict(zip(('bsmbi', 'bsai', 'bbsi', 'aari', 'sapi'), scars))}
-    # LabDatabase and WebDatabase share the backend database. Use the same
-    # transactional service as the API, avoiding a second HTTP login/session.
-    from WebDatabase.assembly_results import save_assembly_result
-    username = django_request.session.get('info', {}).get('uname') or 'webtest'
-    return save_assembly_result(payload, username)
+def AssemblyResultUpload(django_request,Name, Sequence, partList, BackboneList, PlasmidList, alias = "", Note = "", Level = None, features=None):
+    try:
+        session = _create_api_session()
+        token = django_request.COOKIES.get('csrftoken')
+        session.headers.update({
+            'User-Agent':'Django-App/1.0',
+            'Content-Type':'application/json',
+            'X-CSRFToken':token,
+        })
+        if(Level == None):
+            if(len(partList) == 1):
+                Level = 1
+            elif(len(PlasmidList) == 3 or len(PlasmidList) == 4):
+                Level = 2
+            else:
+                Level = 3
+        # print(f"alias:{alias}")
+        print("AssemblyResultUpload")
+        data_body = {'name':Name,'alias':alias,'level':Level,'sequence':Sequence,'note':Note,'ParentInfo':""}
+        if features is not None:
+            data_body['assembly_features'] = features
+        response = session.post(f'{Base_URL}AddPlasmidData',json=data_body,cookies=django_request.COOKIES)
+        if(response.json()["success"] == False):
+            # print(response.json())
+            raise LabDatabaseException(message = "添加质粒数据失败")
+        plasmidid = session.get(f'{Base_URL}PlasmidID?name={Name}',cookies=django_request.COOKIES)
+        Ori_list = []
+        Marker_list = []
+        OriAndMarkerLabel = FittingLabels(Sequence)
+        for each_ori in OriAndMarkerLabel['Origin']:
+            Ori_list.append(each_ori['Name'])
+        for each_marker in OriAndMarkerLabel['Marker']:
+            Marker_list.append(each_marker['Name'])
+        plasmid_culture_body = {"name":Name, "ori":Ori_list,"marker":Marker_list}
+        plasmid_culture_response = session.post(f"{Base_URL}setPlasmidCulture",json = plasmid_culture_body, cookies=django_request.COOKIES)
+        if(plasmid_culture_response.json()["success"] == False):
+            raise LabDatabaseException(message = "添加质粒培养信息失败")
+            # return {"success":False, "message":"添加质粒培养信息失败"}
+        scar_result_list = scarFunction(Sequence)
+        scar_data_body = {'name':Name,'bsmbi':scar_result_list[0],'bsai':scar_result_list[1],'bbsi':scar_result_list[2],'aari':scar_result_list[3],'sapi':scar_result_list[4]}
+        scar_response = session.post(f'{Base_URL}setPlasmidScar',json=scar_data_body,cookies=django_request.COOKIES)
+        if(scar_response.json()["success"] == False):
+            raise LabDatabaseException(message="添加质粒scar信息失败")
+            # return {"success":False, "message":"添加质粒Scar失败"}
+        delete_parent_info(session, plasmidid.json()['PlasmidID'], django_request)
+        add_parent_info(session, django_request, Name, partList, BackboneList, PlasmidList)
+        # delete_parent_info_response = session.get(f"{Base_URL}DeletePlasmidParent")
+        # for each_part in partList:
+        #     request_body = {"SonPlasmidName":Name,"ParentPartID":each_part}
+        #     part_response = session.post(f"{Base_URL}AddPartParentByID",json=request_body,cookies=django_request.COOKIES)
+        #     if(part_response.status_code != 200):
+        #         return {"success":False,"message":"Parent Part 濞ｈ濮炴径杈Е"}
+        # for each_backbone in BackboneList:
+        #     request_body = {"SonPlasmidName":Name,"ParentBackboneID":each_backbone}
+        #     backbone_response = session.post(f"{Base_URL}AddBackboneParentByID",json=request_body,cookies=django_request.COOKIES)
+        #     if(backbone_response.status_code != 200):
+        #         return {"success":False,"message":"Parent Backbone 濞ｈ濮炴径杈Е"}
+        # for each_plasmid in PlasmidList:
+        #     request_body = {"SonPlasmidName":Name,"ParentPlasmidID":each_plasmid}
+        #     plasmid_response = session.post(f"{Base_URL}AddPlasmidParentByID",json=request_body,cookies=django_request.COOKIES)
+        #     if(plasmid_response.status_code != 200):
+        #         return {"success":False,"message":"Parent Plasmid 濞ｈ濮炴径杈Е"}
+        return {"success":True}
+    except LabDatabaseException as exc:
+        return {"success":False,"message":str(exc.message)}
+    except Exception as exc:
+        return {"success":False,"message":str(exc.args)}
 
 
 
-def delete_parent_info(session,plasmidid,django_request):
-    delete_parent_info_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}DeletePlasmidParent?plasmidid={plasmidid}",cookies=django_request.COOKIES)
+def delete_parent_info(session, plasmidid, django_request):
+    response = session.get(f'{Base_URL}DeletePlasmidParent?plasmidid={plasmidid}', cookies=django_request.COOKIES)
+    response.raise_for_status()
+    if not response.json().get('success'):
+        raise ValueError('Failed to replace parent relationships')
 
 
 
-def add_parent_info(session,django_request,Name,partList,BackboneList,PlasmidList):
-    for each_part in partList:
-        request_body = {"SonPlasmidName":Name,"ParentPartID":each_part}
-        part_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddPartParentByID",json=request_body,cookies=django_request.COOKIES)
-    for each_backbone in BackboneList:
-        request_body = {"SonPlasmidName":Name,"ParentBackboneID":each_backbone}
-        backbone_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddBackboneParentByID",json=request_body,cookies=django_request.COOKIES)
-    for each_plasmid in PlasmidList:
-        request_body = {"SonPlasmidName":Name,"ParentPlasmidID":each_plasmid}
-        plasmid_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddPlasmidParentByID",json=request_body,cookies=django_request.COOKIES)
+def add_parent_info(session, django_request, Name, partList, BackboneList, PlasmidList):
+    for endpoint, key, values in [('AddPartParentByID', 'ParentPartID', partList),
+                                  ('AddBackboneParentByID', 'ParentBackboneID', BackboneList),
+                                  ('AddPlasmidParentByID', 'ParentPlasmidID', PlasmidList)]:
+        for value in values:
+            response = session.post(Base_URL + endpoint, json={'SonPlasmidName': Name, key: value}, cookies=django_request.COOKIES)
+            response.raise_for_status()
+            if not response.json().get('success'):
+                raise ValueError('Failed to save parent: ' + str(value))
 
 
 def modify_part(request,partid):
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',
@@ -2897,7 +3384,7 @@ def modify_part(request,partid):
             if(partid == None or partid == ""):
                 raise LabDatabaseException(message=f"参数{partid}不能为空")
                 # return JsonResponse({"success":False,"message":"Parameter is empty"},status = 400, safe = False)
-            part_obj = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartByID?ID={partid}",cookies=request.COOKIES).json())[0]
+            part_obj = (session.get(f"{Base_URL}PartByID?ID={partid}",cookies=request.COOKIES).json())[0]
             return render(request,"PartEdit.html",{"part":part_obj})
         else:
             data = json.loads(request.body)
@@ -2914,7 +3401,7 @@ def modify_part(request,partid):
             request_body = {"PartID":partid,"Name":data['geneName'],"Alias":data['geneAlias'],"Type":type,"Level0Sequence":data['sequence'],
                             "ConfirmedSequence":"","InsertSequence":"","source":data["speciesSource"],"reference":data["references"],
                                 "note":data["notes"]}
-            part_update_response = (session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}UpdatePart',json=request_body,cookies=request.COOKIES))
+            part_update_response = (session.post(f'{Base_URL}UpdatePart',json=request_body,cookies=request.COOKIES))
             if(part_update_response.status_code != 200):
                 raise LabDatabaseException(message=part_update_response.json()["message"])
                 # return JsonResponse({"success":False,"message":part_update_response.json()},status = 400, safe=False)
@@ -2923,12 +3410,12 @@ def modify_part(request,partid):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
         
         
 def modify_backbone(request,backboneid):
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',
@@ -2939,8 +3426,8 @@ def modify_backbone(request,backboneid):
             if(backboneid == None or backboneid == ""):
                 raise LabDatabaseException(message=f"参数{backboneid}不能为空")
                 # return JsonResponse({"success":False,"message":"Parameter cannot be empty"}, status = 400, safe=False)
-            Backbone_obj = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}BackboneByID?ID={backboneid}",cookies=request.COOKIES).json())[0]
-            backbonescar = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getBackboneScar?id={backboneid}",cookies=request.COOKIES)
+            Backbone_obj = (session.get(f"{Base_URL}BackboneByID?ID={backboneid}",cookies=request.COOKIES).json())[0]
+            backbonescar = session.get(f"{Base_URL}getBackboneScar?id={backboneid}",cookies=request.COOKIES)
             if(backbonescar.json()['success']):
                 Backbone_obj['scar_info'] = backbonescar.json()['scar_info'][0]
             return render(request,"BackboneEdit.html",{"backbone":Backbone_obj})
@@ -2948,9 +3435,9 @@ def modify_backbone(request,backboneid):
             data = json.loads(request.body)
             request_body = {"BackboneID":data['vectorId'],"newName":data['vectorName'],"sequence":data['sequence'],"species":data['host'],"copynumber":data['copyNumber'],"note":data['notes'],"alias":data['vectorAlias'],"tag":"abnormal" if (len(data['ori']) > 1 or len(data['marker']) > 1) else "normal"}
 
-            update_backbone_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}UpdateBackbone",json=request_body,cookies = request.COOKIES)
-            update_backbone_culture_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}setBackboneCulture",json={"id":data["vectorId"],"ori":data['ori'],"marker":data['marker']},cookies=request.COOKIES)
-            update_backbone_scar_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}setBackboneScar",json={"backboneid":data['vectorId'],'bsmbi':data['scarSites']['BsmBI'],'bsai':data['scarSites']['BsaI'],
+            update_backbone_response = session.post(f"{Base_URL}UpdateBackbone",json=request_body,cookies = request.COOKIES)
+            update_backbone_culture_response = session.post(f"{Base_URL}setBackboneCulture",json={"id":data["vectorId"],"ori":data['ori'],"marker":data['marker']},cookies=request.COOKIES)
+            update_backbone_scar_response = session.post(f"{Base_URL}setBackboneScar",json={"backboneid":data['vectorId'],'bsmbi':data['scarSites']['BsmBI'],'bsai':data['scarSites']['BsaI'],
                                                                                             'bbsi':data['scarSites']['BbsI'],'aari':data['scarSites']['Aari'],'sapi':data['scarSites']['Sapi']},cookies=request.COOKIES)
             if(update_backbone_response.status_code == 200 and update_backbone_culture_response.json()["success"] and update_backbone_scar_response.json()["success"]):
                 return JsonResponse({"success":True},status = 200, safe=False)
@@ -2965,14 +3452,14 @@ def modify_backbone(request,backboneid):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 
 
 def modify_plasmid(request,plasmidid):
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',
@@ -2982,17 +3469,17 @@ def modify_plasmid(request,plasmidid):
         if(request.method != "POST"):
             if(plasmidid == None or plasmidid == ""):
                 return JsonResponse({"success":False,"message":"Parameter cannot be empty"}, status = 400, safe=False)
-            Plasmid_obj = (session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PlasmidByID?ID={plasmidid}",cookies=request.COOKIES).json())[0]
-            plasmidscar = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getPlasmidScar?plasmidid={plasmidid}",cookies=request.COOKIES)
+            Plasmid_obj = (session.get(f"{Base_URL}PlasmidByID?ID={plasmidid}",cookies=request.COOKIES).json())[0]
+            plasmidscar = session.get(f"{Base_URL}getPlasmidScar?plasmidid={plasmidid}",cookies=request.COOKIES)
             if(plasmidscar.json()['success']):
                 Plasmid_obj['scar_info'] = plasmidscar.json()['scar_info'][0]
             else:
                 raise LabDatabaseException(message = "Plasmid 数据获取失败")
-            plasmidParentPart = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPartParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentPart = session.get(f'{Base_URL}GetPartParent?plasmidid={plasmidid}',cookies=request.COOKIES)
 
-            plasmidParentBackbone = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetBackboneParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentBackbone = session.get(f'{Base_URL}GetBackboneParent?plasmidid={plasmidid}',cookies=request.COOKIES)
 
-            plasmidParentPlasmid = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPlasmidParent?plasmidid={plasmidid}',cookies=request.COOKIES)
+            plasmidParentPlasmid = session.get(f'{Base_URL}GetPlasmidParent?plasmidid={plasmidid}',cookies=request.COOKIES)
 
             result = {
                         'Part':[],
@@ -3026,32 +3513,32 @@ def modify_plasmid(request,plasmidid):
             # UpdatePlasmid
             request_body = {"id":data['plasmidId'],"newName":data['plasmidName'],"newAlias":data["plasmidAlias"],"newLevel":data['level'],"newSequence":data['sequence'],"newOri":data['ori'],"newMarker":data['marker'],"newNote":data['notes'],"tag":"abnormal" if (len(data['ori']) > 1 or len(data['marker']) > 1) else "normal"}
 
-            update_plasmid_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}UpdatePlasmid",json=request_body,cookies=request.COOKIES)
+            update_plasmid_response = session.post(f"{Base_URL}UpdatePlasmid",json=request_body,cookies=request.COOKIES)
         
         
         
-            update_plasmid_scar_response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}setPlasmidScar",json={"plasmidid":plasmidid,'bsmbi':data['scarSites']['BsmBI'],'bsai':data['scarSites']['BsaI'],
+            update_plasmid_scar_response = session.post(f"{Base_URL}setPlasmidScar",json={"plasmidid":plasmidid,'bsmbi':data['scarSites']['BsmBI'],'bsai':data['scarSites']['BsaI'],
                                                                                             'bbsi':data['scarSites']['BbsI'],'aari':data['scarSites']['Aari'],'sapi':data['scarSites']['Sapi']},cookies=request.COOKIES)
         
-            delete_parent = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}DeletePlasmidParent?plasmidid={plasmidid}",cookies=request.COOKIES)
+            delete_parent = session.get(f"{Base_URL}DeletePlasmidParent?plasmidid={plasmidid}",cookies=request.COOKIES)
             # if(delete_parent.status_code ==200):
             customParentInfo = ""
-            parent_part_list = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}")
+            parent_part_list = session.get(f"{Base_URL}")
             for each_part in data['parentPart']:
-                addPartResponse = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddPartParent",json={"SonPlasmidId":plasmidid,"ParentPartName":each_part},cookies=request.COOKIES)
+                addPartResponse = session.post(f"{Base_URL}AddPartParent",json={"SonPlasmidId":plasmidid,"ParentPartName":each_part},cookies=request.COOKIES)
                 if(addPartResponse.status_code != 200):
                     customParentInfo += f"Part({each_part})"
             for each_backbone in data['parentBackbone']:
-                addBackboneResponse = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddBackboneParent",json={"SonPlasmidId":plasmidid,"ParentBackboneName":each_backbone},cookies=request.COOKIES)
+                addBackboneResponse = session.post(f"{Base_URL}AddBackboneParent",json={"SonPlasmidId":plasmidid,"ParentBackboneName":each_backbone},cookies=request.COOKIES)
                 if(addBackboneResponse.status_code != 200):
                     customParentInfo += f"Backbone({each_backbone})"
             for each_plasmid in data['parentPlasmid']:
-                addPlasmidResponse = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}AddPlasmidParent",json={"SonPlasmidId":plasmidid,"ParentPlasmidName":each_plasmid},cookies=request.COOKIES)
+                addPlasmidResponse = session.post(f"{Base_URL}AddPlasmidParent",json={"SonPlasmidId":plasmidid,"ParentPlasmidName":each_plasmid},cookies=request.COOKIES)
                 if(addPlasmidResponse.status_code != 200):
                     customParentInfo += f"Plasmid({each_plasmid})"
             print(f"CustomParent:{customParentInfo}")
             request_body = {"PlasmidID":plasmidid,"PlasmidParentInfo":customParentInfo}
-            session.post(f'{service_url("WEBDATABASE_API_BASE_URL")}UpdateParentInfo',json=request_body,cookies=request.COOKIES)
+            session.post(f'{Base_URL}UpdateParentInfo',json=request_body,cookies=request.COOKIES)
 
             if(update_plasmid_response.status_code == 200 and update_plasmid_scar_response.status_code == 200):
                 return JsonResponse({"success":True},status = 200, safe=False)
@@ -3065,26 +3552,47 @@ def modify_plasmid(request,plasmidid):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status = 400)
+        return JsonResponse({"success":False,"message":str(exc)},status = 500)
     
     
     
 def GetExperienceDetail(request, partName):
     try:
-        session = ServiceSession()
+        session = requests.session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
         })
-        response = session.get(service_url("EXPERIMENT_BASE_URL", "api/part/view"), params={"filter": f"name={partName}"})
-        if(len(response.json()['parts']) == 0):
+        response = session.get(
+            f"{Exp_URL}api/part/view",
+            params={"filter": f"name={partName}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        items = response_data.get('items')
+        if items is None:
+            items = response_data.get('item')
+        if items is None:
+            items = response_data.get('parts', [])
+        if not isinstance(items, list):
+            items = [items] if items else []
+
+        if len(items) == 0:
+            if request.GET.get("check_only") == "1":
+                return JsonResponse({"success": True, "available": False})
             raise LabDatabaseException(message = "获取数据为空")
-        ID = response.json()['parts'][0]['ID']
-        return redirect(f"{service_url('EXPERIMENT_BASE_URL')}part/{ID}")
+        ID = items[0].get('ID', items[0].get('id'))
+        if ID is None:
+            raise LabDatabaseException(message="外部数据缺少 ID")
+        detail_url = f"{Exp_URL}part/{ID}"
+        if request.GET.get("check_only") == "1":
+            return JsonResponse({"success": True, "available": True, "url": detail_url})
+        return redirect(detail_url)
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)})
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 def view_upload_records(request):
@@ -3096,12 +3604,12 @@ def view_upload_records(request):
             raise LabDatabaseException(message="table 只支持 parttable、backbonetable、plasmidneed")
 
         page = max(int(request.GET.get("page", 1)), 1)
-        page_size = bounded_page_size(request.GET.get("pagesize"), upload=True)
+        page_size = min(max(int(request.GET.get("pagesize", 100)), 1), 5000)
         filter_expr = request.GET.get("filter", "")
 
-        session = ServiceSession()
+        session = requests.Session()
         response = session.get(
-            f"{service_url('WEBDATABASE_API_BASE_URL')}GetUploadRecords",
+            f"{Base_URL}GetUploadRecords",
             params={
                 "table": table_name,
                 "page": page,
@@ -3109,7 +3617,7 @@ def view_upload_records(request):
                 "filter": filter_expr,
             },
             cookies=request.COOKIES,
-            timeout=settings.SERVICE_HTTP_TIMEOUT,
+            timeout=30,
         )
         try:
             payload = response.json()
@@ -3126,7 +3634,7 @@ def view_upload_records(request):
 
 def user(request, username):
     try:
-        session = ServiceSession()
+        session = requests.session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
@@ -3135,10 +3643,10 @@ def user(request, username):
             username = request.session['info']['uname']
             user = request.user
             userid = request.user.uid
-            user_repository_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getrepocountbyuser/{userid}",cookies=request.COOKIES).json()['count']
-            user_part_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserpartcount/{username}",cookies=request.COOKIES).json()['count']
-            user_backbone_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserbackbonecount/{username}",cookies=request.COOKIES).json()['count']
-            user_plasmid_count = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getuserplasmidcount/{username}",cookies=request.COOKIES).json()['count']
+            user_repository_count = session.get(f"{Base_URL}getrepocountbyuser/{userid}",cookies=request.COOKIES).json()['count']
+            user_part_count = session.get(f"{Base_URL}getuserpartcount/{username}",cookies=request.COOKIES).json()['count']
+            user_backbone_count = session.get(f"{Base_URL}getuserbackbonecount/{username}",cookies=request.COOKIES).json()['count']
+            user_plasmid_count = session.get(f"{Base_URL}getuserplasmidcount/{username}",cookies=request.COOKIES).json()['count']
             user_info = {}
             user_info['repoCount'] = user_repository_count
             user_info['partCount'] = user_part_count
@@ -3148,30 +3656,30 @@ def user(request, username):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status = 400)
+        return JsonResponse({"success":False,"message":str(exc)},status = 500)
     
 
 
 def GetParentInfo(request):
     try:
-        session = ServiceSession()
+        session = requests.session()
         session.headers.update({
             'User-Agent':'Django-App/1.0',
             'Content-Type':'application/json',
         })
         if(request.method == "GET"):
             plasmidName = request.GET.get("PlasmidName");
-            plasmidID = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PlasmidID?name={plasmidName}",cookies=request.COOKIES).json()["PlasmidID"];
+            plasmidID = session.get(f"{Base_URL}PlasmidID?name={plasmidName}",cookies=request.COOKIES).json()["PlasmidID"];
 
-            plasmidParentPart = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPartParent?plasmidid={plasmidID}',cookies=request.COOKIES)
+            plasmidParentPart = session.get(f'{Base_URL}GetPartParent?plasmidid={plasmidID}',cookies=request.COOKIES)
 
-            plasmidParentBackbone = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetBackboneParent?plasmidid={plasmidID}',cookies=request.COOKIES)
+            plasmidParentBackbone = session.get(f'{Base_URL}GetBackboneParent?plasmidid={plasmidID}',cookies=request.COOKIES)
 
-            plasmidParentPlasmid = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPlasmidParent?plasmidid={plasmidID}',cookies=request.COOKIES)
+            plasmidParentPlasmid = session.get(f'{Base_URL}GetPlasmidParent?plasmidid={plasmidID}',cookies=request.COOKIES)
 
-            plasmidSonPlasmid = session.get(f'{service_url("WEBDATABASE_API_BASE_URL")}GetPlasmidSon?plasmidid={plasmidID}',cookies = request.COOKIES)
+            plasmidSonPlasmid = session.get(f'{Base_URL}GetPlasmidSon?plasmidid={plasmidID}',cookies = request.COOKIES)
 
-            plasmidCustomInfo = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getPlasmidCulture?plasmidId={plasmidID}",cookies=request.COOKIES)
+            plasmidCustomInfo = session.get(f"{Base_URL}getPlasmidCulture?plasmidId={plasmidID}",cookies=request.COOKIES)
             print(plasmidParentPlasmid.json())
             if(plasmidParentPart.status_code == 200 and plasmidParentBackbone.status_code == 200 and
                 plasmidParentPlasmid.status_code == 200 and plasmidSonPlasmid.status_code == 200 and plasmidCustomInfo.status_code == 200):
@@ -3207,12 +3715,12 @@ def GetParentInfo(request):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
     
 
 def showRepository(request, repositoryName):
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',
@@ -3221,7 +3729,7 @@ def showRepository(request, repositoryName):
         })
         if(request.method == "GET"):
             request_body = {"Name":repositoryName}
-            response = session.post(f"{service_url('WEBDATABASE_API_BASE_URL')}getrepo",json=request_body,cookies=request.COOKIES)
+            response = session.post(f"{Base_URL}getrepo",json=request_body,cookies=request.COOKIES)
             print(response.json())
             user = request.session['info']['uname']
             if(response.status_code == 200):
@@ -3230,21 +3738,21 @@ def showRepository(request, repositoryName):
                 plasmid_id_list = response.json()["data"]["plasmids"]
                 part_info_list = []
                 for each_part in part_id_list:
-                    part_name_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PartNameByID?ID={each_part}",cookies=request.COOKIES)
+                    part_name_response = session.get(f"{Base_URL}PartNameByID?ID={each_part}",cookies=request.COOKIES)
                     if(part_name_response.status_code == 200):
                         part_name = part_name_response.json()["PartName"]
                     else:
                         # part name fetch failed
                         raise LabDatabaseException(message = f"Part {each_part} 不存在")
                         # return HttpResponse("False",content_type="text")
-                    part_type_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}TypeByID?ID={each_part}",cookies=request.COOKIES)
+                    part_type_response = session.get(f"{Base_URL}TypeByID?ID={each_part}",cookies=request.COOKIES)
                     if(part_type_response.status_code == 200):
                         part_type = part_type_response.json()["Type"]
                     else:
                         # part type fetch failed
                         raise LabDatabaseException(message=f"Part {part_name} type 未标注")
                         # return HttpResponse("False",content_type="text")
-                    # part_scar_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getPartScar?id={each_part}",cookies=request.COOKIES).json()
+                    # part_scar_response = session.get(f"{Base_URL}getPartScar?id={each_part}",cookies=request.COOKIES).json()
                     # print(part_scar_response)
                     # if(part_scar_response["success"] and len(part_scar_response["scar_info"])!=0):
                     #     part_scar = f"BsmBI({part_scar_response['scar_info'][0]['bsmbi']})BsaI({part_scar_response['scar_info'][0]['bsai']})BbsI({part_scar_response['scar_info'][0]['bbsi']})"
@@ -3254,9 +3762,9 @@ def showRepository(request, repositoryName):
                     part_info_list.append({"name":part_name,"Type":part_type,"scar":""})
                 backbone_info_list = []
                 for each_backbone in backbone_id_list:
-                    backbone_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}BackboneByID?ID={each_backbone}",cookies=request.COOKIES)
+                    backbone_response = session.get(f"{Base_URL}BackboneByID?ID={each_backbone}",cookies=request.COOKIES)
                     if(backbone_response.status_code == 200):
-                        backbone_scar_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getBackboneScar?id={each_backbone}",cookies=request.COOKIES).json()
+                        backbone_scar_response = session.get(f"{Base_URL}getBackboneScar?id={each_backbone}",cookies=request.COOKIES).json()
                         if(backbone_scar_response["success"]):
                             backbone_scar = f"BsmBI({backbone_scar_response['scar_info'][0]['bsmbi']})BsaI({backbone_scar_response['scar_info'][0]['bsai']})BbsI({backbone_scar_response['scar_info'][0]['bbsi']})"
                             backbone_info_list.append({"name":backbone_response.json()[0]["name"],"ori":", ".join(backbone_response.json()[0]["ori"]),"marker":", ".join(backbone_response.json()[0]["marker"]),"scar":backbone_scar})
@@ -3268,9 +3776,9 @@ def showRepository(request, repositoryName):
                         # return HttpResponse("False",content_type="text")
                 plasmid_info_list = []
                 for each_plasmid in plasmid_id_list:
-                    plasmid_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}PlasmidByID?ID={each_plasmid}",cookies=request.COOKIES)
+                    plasmid_response = session.get(f"{Base_URL}PlasmidByID?ID={each_plasmid}",cookies=request.COOKIES)
                     if(plasmid_response.status_code == 200):
-                        plasmid_scar_response = session.get(f"{service_url('WEBDATABASE_API_BASE_URL')}getPlasmidScar?plasmidid={each_plasmid}",cookies=request.COOKIES).json()
+                        plasmid_scar_response = session.get(f"{Base_URL}getPlasmidScar?plasmidid={each_plasmid}",cookies=request.COOKIES).json()
                         if(plasmid_scar_response['success']):
                             backbone_scar = f"BsmBI({plasmid_scar_response['scar_info'][0]['bsmbi']})BsaI({plasmid_scar_response['scar_info'][0]['bsai']})BbsI({plasmid_scar_response['scar_info'][0]['bbsi']})"
                             plasmid_info_list.append({"name":plasmid_response.json()[0]["name"],"length":plasmid_response.json()[0]["length"],"scar":backbone_scar})
@@ -3290,9 +3798,46 @@ def showRepository(request, repositoryName):
     except LabDatabaseException as exc:
         return exc.to_response()
     except Exception as exc:
-        return JsonResponse({"success":False,"message":str(exc)},status=400)
+        return JsonResponse({"success":False,"message":str(exc)},status=500)
 
 
 
 if __name__ == "__main__":
     _determine_target_enzyme("cctcctgagaaatctgctcgtcagtggtgctcacactgacgaatcatgtacagatcataccgatgactgcctggcgactcacaactaagcaagacagccggaaccagcgccggcgaacaccactgcatatatggcatatcacaacagtccacgtctcaagcagttacagagatgttacgaaccactagtgcactgcagtacaagcttgccttgtccccgccgggtcacccggccagcgacatggaggcccagaataccctccttgacagtcttgacgtgcgcagctcaggggcatgatgtgactgtcgcccgtacatttagcccatacatccccatgtataatcatttgcatccatacattttgatggccgcacggcgcgaagcaaaaattacggctcctcgctgcagacctgcgagcagggaaacgctcccctcacagacgcgttgaattgtccccacgccgcgcccctgtagagaaatataaaaggttaggatttgccactgaggttcttctttcatatacttccttttaaaatcttgctaggatacagttctcacatcacatccgaacataaacaacaatgacagtcaacactaagacctatagtgagagagcagaaactcatgcctcaccagtagcacaacgattatttcgattaatggaactgaagaaaaccaatttatgtgcatcaattgatgttgataccactaaggaattccttgaattaattgataaattgggtccttatgtatgcttaatcaagacacatattgatataatcaatgatttttcctatgaatccactattgaaccattattagaactttcacgtaaacatcaatttatgatttttgaagatagaaaatttgctgatattggtaataccgtgaagaaacaatatattggtggagtttataaaattagtagttgggcagatattactaatgctcatggtgtcactgggaatggagtagttgaaggattaaaacagggagctaaagaaaccaccaccaaccaagagccaagagggttattgatgttagctgaattatcatcagtgggatcattagcatatggagaatattctcaaaaaactgttgaaattgctaaatccgataaggaatttgttattggatttattgcccaacgtgatatgggtggacaagaagaaggatttgattggcttattatgacacctggagttggattagatgataaaggtgatggattaggacaacaatatagaactgttgatgaagttgttagcactggaactgatattatcattgttggtagaggattgtttggtaaaggaagagatccagatattgaaggtaaaaggtatagagatgctggttggaatgcttatttgaaaaagactggccaattataaacagtactgacaataaaaagattcttgttttcaagaacttgtcatttgtatagtttttttatattgtagttgttctattttaatcaaatgttagcgtgatttatattttttttcgcctcgacatcatctgcccagatgcgaagttaagtgcgcagaaagtaatatcatgcgtcaatcgtatgtgaatgctggtcgctatactgctgtcgattcgatactaacgccgccatccagtgtcgagagtagagcacttgaatccactgccccgggaatctcggtcgtaatgatttctataatgacgaaaaaaaaaaaattggaaagaaaaagcttcatggcctttataaaaaggaactatccaatacctcgccagaaccaagtaacagtattttacggggcacaaatcaagaacaataagacaggactgtaaagatggacgcattgaactccaaagaacaacaagagttccaaaaagtagtggaacaaaagcaaatgaaggatttcatgcgtttgtactctaatctggtagaaagatgtttcacagactgtgtcaatgacttcacaacatcaaagctaaccaataaggaacaaacatgcatcatgaagtgctcagaaaagttcttgaagcatagcgaacgtgtagggcagcgtttccaagaacaaaacgctgccttgggacaaggcttgggccgataaggtgtactggcgtatatatatctaattatgtatctctggtgtagcccatttttagcatgtaaatataaagaagagacctatcagctcactcaaaggcggtaatacggttatccacagaatcaggggataacgcaggaaagaacatgtgagcaaaaggccagcaaaaggccaggaaccgtaaaaaggccgcgttgctggcgtttttccataggctccgcccccctgacgagcatcacaaaaatcgacgctcaagtcagaggtggcgaaacccgacaggactataaagataccaggcgtttccccctggaagctccctcgtgcgctctcctgttccgaccctgccgcttaccggatacctgtccgcctttctcccttcgggaagcgtggcgctttctcatagctcacgctgtaggtatctcagttcggtgtaggtcgttcgctccaagctgggctgtgtgcacgaaccccccgttcagcccgaccgctgcgccttatccggtaactatcgtcttgagcccaacccggtaagacacgacttatcgccactggcagcagccactggtaacaggattagcagagcgaggtatgtaggcggtgctacagagttcttgaagtggtggcctaactacggctacactagaagaacagtatttggtatctgcgctctgctgaagccagttaccttcggaaaaagagttggtagctcttgatccggcaaacaaaccaccgctggtagcggtggtttttttgtttgcaagcagcagattacgcgcagaaaaaaaggatctcaagaagatcctttgatcttttctacggggtctgacgctcagtggaacgaaaactcacgttaagggattttggtcatgagattatcaaaaagtatcttcacctagatccttttaaattaaaaatgaagttttaaatcaatctaaagtatatatgagtaaacttggtctgacagagttctgaggtcattactggatctatcaacagcagtccaagcgagctcgatatcaaattacgccccgccctgccactcatcgcagtactgttgtaattcattaagcattctgccgacatggaagccatcacaaacggcatgatgaacctgaatcgccagcggcatcagcaccttgtcgccttgcgtataatatttgcccatggtgaaaacgggggcgaagaagttgtccatattggccacgtttaaatcaaaactggtgaaactcacccagggattggctgagacgaaaaacatattctcaataaaccctttagggaaataggccaggttttcaccgtaacacgccacatcttgcgaatatatgtgtagaaactgccggaaatcgtcgtggtattcactccagagcgatgaaaacgtttcagtttgctcatggaaaacggtgtaacaagggtgaacactatcccatatcaccagctcaccgtctttcattgccatacgaaattccggatgagcattcatcaggcgggcaagaatgtgaataaaggccggataaaacttgtgcttatttttctttacggtctttaaaaaggccgtaatatccagctgaacggtctggttataggtacattgagcaactgactgaaatgcctcaaaatgttctttacgatgccattgggatatatcaacggtggtatatccagtgatttttttctccattttagcttccttagctcctgaaaatctcgataactcaaaaaatacgcccggtagtgatcttatttcattatggtgaaagttggaacctcttacgtgcccgatcaactcgcgcgtttgccacctgacgtctaagaaaaggaatattcagcaatttgcccgtgccgaagaaaggcccacccgtgaaggtgagccggtctcggctaaattcgagtgaaacacaggaagatcagaaaatcctcatttcatccatattaacaataatttcaaatgtttatttgcattatttgaaactaggcaagacaagcaacgaaacgtttttgaaaattttgagtattttcaataaatttgtagaggactcagatattgaaaaaaagctacagcaattaatacttgataagaagagtattgagaagggcaacggttcatcatctcatggatctgcacatgaacaaacaccagagtcaaacgacgttgaaattgaggctactgcgccaattgatgacaatacagacgatgataacaaaccgaagttatctgatgtagaaaaggattaaagatgctaagagatagtgatgatatttcataaataatgtaattctatatatgttaattaccttttttgcgaggcatatttatggtgaaggataagttttgaccatcaaagaaggttaatgtggctgtggtttcagggtccataaagcccacatggataacattacgcttgctatgtcgtcggaggagatatttattacttttattattctagttttttacagttatttattaattaattatttttatatgcatgcgaataaaaagtctatatttaagttcttttatttattaatacattttcctctacgagctgtcaccggatgtgctttccggtctgatgagtccgtgaggacgaaacagcctctacaaataattttgtttaagagcaggttgttcatggccgtgcgtatgatgtggggggctcgggcgttgaaaccggggttcggagcgccaggggggtgcttttttattttgttttttttttgcagtataaaaagttagtttgtttaaacaacaaacttttttcatttcttttgtttccccttctcttcttttagttagtttgtttaaacaacaaactagaatatcaagctacaaaaataaataaaaaatgtctaaaggtgaagaattattcactggtgttgtcccaattttggttgaattagatggtgatgttaatggtcacaaattttctgtctccggtgaaggtgaaggtgatgctacttacggtaaattgaccttaaaatttatttgtactactggtaaattgccagttccatggccaaccttagtcactactttaggttatggtttgatgtgttttgctagatacccagatcatatgaaacaacatgactttttcaagtctgccatgccagaaggttatgttcaagaaagaactatttttttcaaagatgacggtaactacaagaccagagctgaagtcaagtttgaaggtgataccttagttaatagaatcgaattaaaaggtattgattttaaagaagatggtaacattttaggtcacaaattggaatacaactataactctcacaatgtttacatcatggctgacaaacaaaagaatggtatcaaagttaacttcaaaattagacacaacattgaagatggttctgttcaattagctgaccattatcaacaaaatactccaattggtgatggtccagtcttgttaccagacaaccattacttatcctatcaatctagattatccaaagatccaaacgaaaagagggatcacatggtcttgttagaatttgttactgctgctggtattacccatggtatggatgaattgtacaaataataaatggtcttcggcttactaaaagccagataacagtatgcatatttgcgcgctgatttttgcggtataagaatatatactgatatgtatacccgaagtatgtcaaaaagaggtatgctatgaagcagcgtattacagtgacagttgacagcgacagctatcagttgctcaaggcatatatgatgtcaatatctccggtctggtaagcacaaccatgcagaatgaagcccgtcgtctgcgtgccgaacgctggaaagcggaaaatcaggaagggatggctgaggtcgcccggtttattgaaatgaacggctcttttgctgacgagaacaggggctggtgaaatgcagtttaaggtttacacctataaaagagagagccgttatcgtctgtttgtggatgtacagagtgatattattgacacgcccgggcgacggatggtgatccccctggccagtgcacgtctgctgtcagataaagtctcccgtgaactttacccggtggtgcatatcggggatgaaagctggcgcatgatgaccaccgatatggccagtgtgccggtttccgttatcggggaagaagtggctgatctcagccaccgcgaaaatgacatcaaaaacgccattaacctgatgttctggggaatataagaagacta")
+
+
+def process_gg_assembly_async(upload_content, django_request, task_id, execution_mode='prepare_and_assemble'):
+    from .assembly_tasks import sync_cache, update
+    from django.db import close_old_connections
+    close_old_connections()
+    try:
+        update(task_id, phase='preparing')
+        _process_gg_assembly_body(upload_content, django_request, task_id, execution_mode)
+    except Exception as exc:
+        obj = cache.get(f'{TASK_STATUS_PREFIX}{task_id}') or CacheClass('processing', 0)
+        obj.setStatus('failed'); obj.setProgress(100); obj.setMessage(str(exc))
+        cache.set(f'{TASK_STATUS_PREFIX}{task_id}', obj)
+    finally:
+        try:
+            sync_cache(task_id, cache.get(f'{TASK_STATUS_PREFIX}{task_id}'))
+        finally:
+            close_old_connections()
+
+
+def assembly_version_status(request, plasmidid):
+    from WebDatabase.models import AssemblyResultVersion
+    from .assembly_versions import version_status, refresh_source_labels
+    if request.method == 'POST':
+        action = json.loads(request.body).get('action')
+        if action != 'refresh_labels':
+            return JsonResponse({'success': False, 'message': 'Unknown action'}, status=400)
+        try:
+            version = refresh_source_labels(plasmidid)
+        except ValueError as exc:
+            return JsonResponse({'success': False, 'message': str(exc)}, status=409)
+    else:
+        version = AssemblyResultVersion.objects.filter(plasmid_id=plasmidid).first()
+    if not version:
+        return JsonResponse({'success': True, 'version': None, 'legacy': True})
+    return JsonResponse({'success': True, 'version': str(version.pk), 'task_id': version.task_id,
+        'revision_kind': version.revision_kind, 'changed_sources': version_status(version)})

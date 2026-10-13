@@ -63,7 +63,7 @@ def GetLBDDimerMenu(api_url,session):
     
     
 def GetLBDDimerValue(api_url,session,name):
-    response = session.get(f"{api_url}/WebDatabase/GetLBDDimerValue/name")
+    response = session.get(f"{api_url}/WebDatabase/GetLBDDimerValue/{name}")
     return response.json()
 
 
@@ -116,7 +116,7 @@ class LBDDimer(LBD):
         self.I = I
         self.Type = "LBD Dimer"
     def save(self,api_url,session):
-        newLBDDimer = {'Name':self.Name,'k1':self.k1,'k2':self.k2,'k3':self.k3,'I':self.I}
+        newLBDDimer = {'name':self.Name,'k1':self.k1,'k2':self.k2,'k3':self.k3,'i':self.I}
         response = session.post(f'{api_url}/WebDatabase/AddLBDDimer',data=newLBDDimer)
         if(response.status_code == 200):
             return "Add LBD Dimer"

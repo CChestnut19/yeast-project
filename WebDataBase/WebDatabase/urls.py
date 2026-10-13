@@ -1,4 +1,4 @@
-from django.urls import path,include
+﻿from django.urls import path,include
 from rest_framework.routers import DefaultRouter
 
 
@@ -15,12 +15,15 @@ from WebDatabase import views,account
 # router.register('PlasmidFile',TbPlasmidUserfileaddressViewSet,basename='PlasmidFile')
 # router.register('Testdatatable',TestdatatableViewSet,basename='Testdatatable')
 # router.register('Straintable',StraintableViewSet,basename='Straintable')
-from .assembly_results import save_assembly_result_view
-
 urlpatterns = [
-    path('SaveAssemblyResult', save_assembly_result_view, name='SaveAssemblyResult'),
+    path("ReplaceFeatures/<str:feature_kind>/<str:name>", views.ReplaceFeatures, name="replace_features"),
     # path("",v),
     path("StrainName",views.SearchByStrainName,name="StrainName"),
+    path("strains", views.StrainCollection, name="strain_collection"),
+    path("strains/<int:strainid>", views.StrainDetail, name="strain_detail"),
+    path("strain-genotypes", views.StrainGenotypeCollection, name="strain_genotype_collection"),
+    path("strain-genotypes/<int:sgid>", views.StrainGenotypeDetail, name="strain_genotype_detail"),
+    path("sync-strain", views.SyncStrain, name="sync_strain"),
 
 
     path("Part",views.PartDataALL,name="Part"),
@@ -43,12 +46,13 @@ urlpatterns = [
     path("AddPartData",views.AddPartData,name="AddPartData"),
     path("AddPartFile",views.AddPartFileAddress,name="AddPartFile"),
     path("UpdatePart",views.UpdatePart,name="UpdatePart"),
-    path("UpdatePartFile",views.UpdatePartFileAddress,name="UpdatePartFile"),
+    # path("UpdatePartFile",views.UpdatePartFileAddress,name="UpdatePartFile"),
     path("UpdatePartRPU",views.UpdatePartRPU,name="UpdatePartRPU"),
     path("deletePart",views.deletePartData,name="deletePart"),
     path("deletePartFile",views.deletePartFile,name="deletePartFile"),
     path("PartFilter",views.PartFilter,name="PartFilter"),
     path("UpdatePartSequence",views.UpdatePartSequence,name="UpdatePartSequence"),
+    path("UpsertPartSequence",views.UpsertPartSequence,name="UpsertPartSequence"),
     path("partlistbyuser/<str:username>",views.PartListByUser,name="partlistbyuser"),
     path("partfields",views.PartFields,name="partfields"),
     path("partSource/<int:partID>",views.GetPartSource,name="partSource"),
@@ -79,7 +83,7 @@ urlpatterns = [
     path("AddPlasmidFile",views.AddPlasmidFileAddress,name="AddPlasmidFile"),
     path("AddPlasmidData",views.AddPlasmidData,name="AddPlasmidData"),
     path("UpdatePlasmid",views.UpdatePlasmidData,name="UpdatePlasmid"),
-    path("UpdatePlasmidFile",views.UpdatePlasmidFileAddress,name="UpdatePlasmidFile"),
+    # path("UpdatePlasmidFile",views.UpdatePlasmidFileAddress,name="UpdatePlasmidFile"),
     path("deletePlasmid",views.deletePlasmidData,name="deletePlasmid"),
     path("deletePlasmidFile",views.deletePlasmidFileAddress,name="deletePlasmidFile"),
     path("deletePlasmidParent",views.DeleteParentPlasmid,name="deletePlasmidParent"),
@@ -112,7 +116,7 @@ urlpatterns = [
     path("AddBackbone",views.AddBackboneData,name="AddBackbone"),
     path("AddBackboneFile",views.AddBackboneFileAddress,name="AddBackboneFile"),
     path("UpdateBackbone",views.UpdateBackboneData,name="UpdateBackbone"),
-    path("UpdateBackboneFile",views.UpdateBackboneFileAddress,name="UpdateBackboneFile"),
+    # path("UpdateBackboneFile",views.UpdateBackboneFileAddress,name="UpdateBackboneFile"),
     path("deleteBackbone",views.DeleteBackboneData,name="deleteBackbone"),
     path("deleteBackboneFile",views.DeleteBackboneFileAddress,name="deleteBackboneFile"),
     path("BackboneFilter",views.BackboneFilter,name="BackboneFilter"),
@@ -136,6 +140,7 @@ urlpatterns = [
     path("GetDBDKd",views.GetDBDKd,name="GetDBDKd"),
     path("AddDBD",views.AddDBD,name="AddDBD"),
     path("UpdateDBD",views.UpdateDBD,name="UpdateDBD"),
+    path("GetDBDKdI0/<str:name>",views.GetDBDKdI0,name='GetDBDKdI0'),
 
     path("GetLBDDimer",views.GetLBDDimer,name="GetLBDDimer"),
     path("GetLBDDimerMenu",views.GetLBDDimerMenu,name="GetLBDDimerMenu"),
@@ -143,6 +148,7 @@ urlpatterns = [
     path("GetLBDDimerAllByName",views.GetLBDDimerAllByName,name="GetLBDDimerAllByName"),
     path("ADDLBDDimer",views.AddLBDDimer,name="ADDLBDDimer"),
     path("UpdateLbdDimer",views.UpdateLbdDimer,name="UpdateLbdDimer"),
+    path("GetLBDDimerValue/<str:name>",views.GetLBDDimerValue,name="GetLBDDimerValue"),
     path("GetLBDNr",views.GetLBDNr,name="GetLBDNr"),
     path("GetLBDNRMenu",views.GetLBDNRMenu,name="GetLBDNRMenu"),
     path("GetLBDAllByName",views.GetLBDNRAllByName,name="GetLBDNRAllByName"),
@@ -221,5 +227,7 @@ urlpatterns = [
     path("listVisitorAccessLogs", views.listVisitorAccessLogs, name="listVisitorAccessLogs"),
     path("updateVisitorAccessLog", views.updateVisitorAccessLog, name="updateVisitorAccessLog"),
     path("deleteVisitorAccessLog", views.deleteVisitorAccessLog, name="deleteVisitorAccessLog"),
+    
+    path("api/<str:project>",views.get_api_doc,name="api")
 ]
 

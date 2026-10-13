@@ -12,7 +12,7 @@ import requests
 #     return DBDList
 
 def GetDBDList(api_url,session):
-    response = session.get(f'{api_url}/WebDatabase/GerDBDList')
+    response = session.get(f'{api_url}/WebDatabase/GetDBDList')
     DBDList = []
     if(response.status_code == 200):
         result = response.json()
@@ -34,7 +34,7 @@ def GetDBD(api_url,Name,session):
     # return dbd
     response = session.get(f'{api_url}/WebDatabase/GetDBDAllByName?name={Name}')
     if(response.status_code == 200):
-        result = response.json()[0]
+        result = response.json()
         dbd = DBD(result['Name'],result['Level0Sequence'],result['Alias'],result['ConfirmedSequence'],result['InsertSequence'],result['SourceOrganism'],result['Reference'],result['Note'],result['I0'],result['kd'])
         return dbd
     return None

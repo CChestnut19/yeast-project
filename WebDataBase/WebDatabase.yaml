@@ -6,7 +6,7 @@ info:
   version: 1.0.0
 
 servers:
-  - url: '/WebDatabase'
+  - url: 'http://10.30.76.2:8000/WebDatabase'
 tags:
   - name: Strain
     description: Function of strain data
@@ -3302,10 +3302,10 @@ paths:
       description: get plasmid scar information
       operationId: getPlasmidScar
       parameters:
-        - name: name
+        - name: plasmidid
           in: query
           required: true
-          description: plasmid name
+          description: plasmid id
           schema:
             type: string
       responses:
@@ -3319,7 +3319,7 @@ paths:
                 scar_info:
                   $ref: '#/Components/Schemas/PlasmidScarInfo'
         '400':
-          description: Parameters name cannot be empty\ No such scar information
+          description: Parameters plasmidid cannot be empty\ No such scar information
           content:
             application/json:
               schema:

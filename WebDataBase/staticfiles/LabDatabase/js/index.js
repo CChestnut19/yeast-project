@@ -5,6 +5,18 @@
             plasmid: 1
         };
 
+        // 必须在首次调用 renderTable 之前初始化，避免 const 暂时性死区。
+        const selectedExportRows = {
+            part: new Map(),
+            backbone: new Map(),
+            plasmid: new Map(),
+        };
+        const currentExportRows = {
+            part: new Map(),
+            backbone: new Map(),
+            plasmid: new Map(),
+        };
+
         function renderRelatedSummary(item) {
             const parts = Array.isArray(item.related_parts) ? item.related_parts : [];
             const backbones = Array.isArray(item.related_backbones) ? item.related_backbones : [];
@@ -137,37 +149,32 @@
             })
 
             async function UploadFile(files, type){
-                if(! files){
+                if(!files || files.length === 0){
                     alert('请选择上传文件');
                     return;
                 }
-                let fd = new FormData();
-                console.log(files.length);
-                for (let i = 0;i<files.length;i++){
-                    let file = files[i];
-                    fd.append('files',file);
-                }
-                console.log(fd['files'])
-                fd.append('type',type);
-                const saveFeatureInput = document.getElementById('saveFeatureInput');
-                fd.append('save_feature', saveFeatureInput && saveFeatureInput.checked ? 'true' : 'false');
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-                const response = await fetch("/LabDatabase/UploadMap",{
-                    method:'POST',
-                    body:fd,
-                    headers:{
-                        'X-CSRFToken':csrfToken,
+                try {
+                    const fd = new FormData();
+                    for (const file of files) fd.append('files', file);
+                    fd.append('type', type);
+                    const saveFeatureInput = document.getElementById('saveFeatureInput');
+                    fd.append('save_feature', saveFeatureInput && saveFeatureInput.checked ? 'true' : 'false');
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                    const result = await apiFetch("/LabDatabase/UploadMap", {
+                        method: 'POST',
+                        body: fd,
+                        headers: { 'X-CSRFToken': csrfToken },
+                        timeout: 60000,
+                    });
+                    document.getElementById("fileInput").value = "";
+                    if(result.task_id){
+                        alert(result.message || '上传成功，数据处理中');
+                        pollTaskStatus(result.task_id);
+                    } else {
+                        displayResult(result);
                     }
-                });
-                var file_input = document.getElementById("fileInput");
-                file_input.innerText = "";
-                const result = await response.json();
-                if(result.task_id){
-                    alert(result.message);
-                    pollTaskStatus(result.task_id);
-                }
-                else{
-                    displayResult(result);
+                } catch (error) {
+                    displayError(`上传失败：${error.message}`);
                 }
             }
 
@@ -176,36 +183,34 @@
                     alert('请选择文件');
                     return;
                 }
-                console.log(file);
-                const fd = new FormData();
-                fd.append('file',file[0]);
-
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-                const response = await fetch("/LabDatabase/UploadFile",{
-                    method:'POST',
-                    body: fd,
-                    headers:{
-                        'X-CSRFToken': csrfToken,
+                try {
+                    const fd = new FormData();
+                    fd.append('file',file[0]);
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                    const result = await apiFetch("/LabDatabase/UploadFile", {
+                        method: 'POST',
+                        body: fd,
+                        headers: { 'X-CSRFToken': csrfToken },
+                        timeout: 60000,
+                    });
+                    document.getElementById('batchFileInput').value = '';
+                    if(result.task_id){
+                        alert(result.message || '上传成功，数据处理中');
+                        pollTaskStatus(result.task_id);
+                    } else {
+                        displayResult(result);
                     }
-                });
-                var file_input = document.getElementById('batchFileInput');
-                file_input.innerText = '';
-                const result = await response.json()
-                if(result.task_id){
-                    alert(result.message);
-                    pollTaskStatus(result.task_id);
+                } catch (error) {
+                    displayError(`上传失败：${error.message}`);
                 }
-                else{
-                    displayResult(result);
-                }
-                
             }
 
             function pollTaskStatus(taskId){
+                let networkErrors = 0;
                 const pollInterval = setInterval(async () => {
                     try {
-                        const response = await fetch(`/LabDatabase/task_status/${taskId}`);
-                        const result = await response.json();
+                        const result = await apiFetch(`/LabDatabase/task_status/${taskId}`, { timeout: 10000 });
+                        networkErrors = 0;
                         console.log(result);
                         if(result.status === "completed"){
                             console.log("completed");
@@ -214,59 +219,35 @@
                             displayResult(result);
                         }
                         else if(result.status === "failed"){
-                            console.log("failed");
-                            console.log(result);
                             clearInterval(pollInterval);
-                            if(result.error){
-                                displayError(result.error);
-                            }
-                            else{
-                                if(result.message){
-                                    displayError(result.message);
-                                }
-                            }
+                            displayError(getApiErrorMessage(result, '任务处理失败'));
                         }
                     }
                     catch(error){
-                        clearInterval(pollInterval);
-                        displayError('轮询失败：'+error.message);
+                        if (error.data?.status === 'failed') {
+                            clearInterval(pollInterval);
+                            displayError(getApiErrorMessage(error.data, '任务处理失败'));
+                            return;
+                        }
+                        networkErrors += 1;
+                        if (error.status === 404 || networkErrors >= 3) {
+                            clearInterval(pollInterval);
+                            displayError('无法获取任务状态：' + error.message);
+                        }
                     }
                 }, 2000);
             }
 
             function displayError(message){
-                alert(message);
+                alert(getApiErrorMessage({ error: message }));
             }
 
             function displayResult(result){
                 if(result.status === "completed"){
-                    if(result.message){
-                        if(result.error){
-                            if(result.error.length && result.error.length != 0){
-                                alert(result.error.join(","));
-                            }
-                            else{
-                                alert(result.message);
-                            }
-                        }
-                        else{
-                            displayError(result.message);
-                        }
-                        
-                        
-                    }
-                    else{
-                        if(result.error && result.error.length != 0){
-                            alert(result.error.join(","));
-                        }
-                        else{
-                            alert("上传完成");
-                        }
-                    }
+                    alert(result.message || "上传完成");
                 }
                 else{
-                    console.log(result.error);
-                    alert('处理失败：'+result.error);
+                    alert('处理失败：' + getApiErrorMessage(result));
                 }
             }
             document.getElementById('PartSelectorReset').addEventListener('click', function(){
@@ -1235,55 +1216,64 @@ function setupMenuEvents() {
                     alert('请选择仓库名称');
                     return;
                 }
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
-                const response = await fetch('/LabDatabase/AssemblyRepo',{
-                    method : "POST",
-                    headers:{
-                        'Content-Type':'application/json',
-                        'X-CSRFToken': csrfToken,
-                    },
-                    body: JSON.stringify({"repositoryName":warehouseName}),
-                });
-                // .then(response => response.json)
-                const result = await response.json();
-                console.log(result);
-                if(result.task_id){
-                    alert(result.message);
-                    pollAssemblyTaskStatus(result.task_id,warehouseName);
-                }
-                else{
-                    displayResult(result);
+                try {
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                    const result = await apiFetch('/LabDatabase/AssemblyRepo', {
+                        method: "POST",
+                        headers: {
+                            'Content-Type':'application/json',
+                            'X-CSRFToken': csrfToken,
+                        },
+                        body: JSON.stringify({"repositoryName":warehouseName}),
+                    });
+                    if(result.task_id){
+                        alert(result.message || '组装任务已开始');
+                        pollAssemblyTaskStatus(result.task_id,warehouseName);
+                    } else {
+                        displayResult(result);
+                    }
+                } catch (error) {
+                    displayError(`启动组装失败：${error.message}`);
                 }
             }
 
             function pollAssemblyTaskStatus(taskId,warehouseName){
+                let networkErrors = 0;
+                let polling = false;
                 const pollInterval = setInterval(async () => {
+                    if (polling) return;
+                    polling = true;
                     try {
-                        const response = await fetch(`/LabDatabase/task_status/${taskId}`);
-                        const result = await response.json();
-                        console.log(result);
+                        const result = await apiFetch(`/LabDatabase/task_status/${taskId}`, { timeout: 30000 });
+                        networkErrors = 0;
                         if(result.status === "completed"){
-                            console.log("completed");
-                            
+                            console.log(result.result);
                             clearInterval(pollInterval);
                             displayResult(result);
-
-                            // window.location.href = `/LabDatabase/getAssembly/${warehouseName}/${taskId}`
-                            window.location.href = result.result.download_url;
+                            const downloadUrl = result.result?.archive_download_url || result.result?.download_url;
+                            console.log(downloadUrl);
+                            if (downloadUrl) window.location.href = downloadUrl;
                         }
                         else if(result.status === "failed"){
-                            console.log("failed");
-                            console.log(result);
                             clearInterval(pollInterval);
-                            displayError(result.error);
+                            displayError(getApiErrorMessage(result, '组装失败'));
                         }
                     }
                     catch(error){
-                        clearInterval(pollInterval);
-                        displayError('轮询失败：'+error.message);
+                        if (error.data?.status === 'failed') {
+                            clearInterval(pollInterval);
+                            displayError(getApiErrorMessage(error.data, '组装失败'));
+                            return;
+                        }
+                        networkErrors += 1;
+                        if (error.status === 404 || networkErrors >= 10) {
+                            clearInterval(pollInterval);
+                            displayError('无法获取组装状态：' + error.message);
+                        }
+                    } finally {
+                        polling = false;
                     }
-                }, 2000);
+                }, 3000);
             }
 
 
@@ -1297,26 +1287,25 @@ function setupMenuEvents() {
                     alert('请选择文件');
                     return;
                 }
-                let fd = new FormData();
-                console.log(file.length);
-                fd.append('file',file[0]);
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
-                const response = await fetch('/LabDatabase/createRepo',{
-                    method: 'POST',
-                    body:fd,
-                    headers:{
-                        'X-CSRFToken':csrfToken,
-                    },
-                });
-                // .then(response => response.json)
-                const result = await response.json();
-                if(result.task_id){
-                    alert(result.message);
-                    pollTaskStatus(result.task_id);
-                }
-                else{
-                    displayResult(result);
+                try {
+                    const fd = new FormData();
+                    fd.append('file',file[0]);
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                    const result = await apiFetch('/LabDatabase/createRepo', {
+                        method: 'POST',
+                        body: fd,
+                        headers: { 'X-CSRFToken':csrfToken },
+                        timeout: 60000,
+                    });
+                    if(result.task_id){
+                        alert(result.message || '仓库创建任务已开始');
+                        //pollTaskStatus(result.task_id);
+                        pollAssemblyTaskStatus(result.task_id,"");
+                    } else {
+                        displayResult(result);
+                    }
+                } catch (error) {
+                    displayError(`创建仓库失败：${error.message}`);
                 }
             }
         
@@ -1337,9 +1326,141 @@ function setupMenuEvents() {
                 }, 3000);
             }
 
+        function getExportRowId(type, item) {
+            if (type === 'part') return item.partid;
+            if (type === 'backbone') return item.id;
+            return item.plasmidid;
+        }
+
+        function registerCurrentExportRows(type, rows) {
+            currentExportRows[type].clear();
+            rows.forEach(item => {
+                currentExportRows[type].set(String(getExportRowId(type, item)), item);
+            });
+            updateExportControls(type);
+        }
+
+        function renderExportCheckbox(type, item) {
+            const rowId = String(getExportRowId(type, item));
+            currentExportRows[type].set(rowId, item);
+            const checked = selectedExportRows[type].has(rowId) ? 'checked' : '';
+            updateExportControls(type);
+            return `<td><input type="checkbox" class="export-row-checkbox" data-type="${type}" data-id="${rowId}" ${checked} onchange="toggleExportSelection('${type}', '${rowId}', this.checked)"></td>`;
+        }
+
+        function toggleExportSelection(type, rowId, checked) {
+            const normalizedId = String(rowId);
+            if (checked) {
+                const row = currentExportRows[type].get(normalizedId);
+                if (row) selectedExportRows[type].set(normalizedId, row);
+            } else {
+                selectedExportRows[type].delete(normalizedId);
+            }
+            updateExportControls(type);
+        }
+
+        function toggleCurrentPageSelection(type, checked) {
+            document.querySelectorAll(`#${type}TableBody .export-row-checkbox`).forEach(input => {
+                input.checked = checked;
+                toggleExportSelection(type, input.dataset.id, checked);
+            });
+        }
+
+        function updateExportControls(type) {
+            const button = document.getElementById(`${type}ExportButton`);
+            if (button) {
+                const count = selectedExportRows[type].size;
+                button.disabled = count === 0;
+                button.innerHTML = `<i class="fas fa-file-export"></i> 导出选中数据${count ? `（${count}）` : ''}`;
+            }
+
+            const selectAll = document.getElementById(`${type}SelectAll`);
+            if (!selectAll) return;
+            const currentIds = Array.from(currentExportRows[type].keys());
+            const selectedCount = currentIds.filter(id => selectedExportRows[type].has(id)).length;
+            selectAll.checked = currentIds.length > 0 && selectedCount === currentIds.length;
+            selectAll.indeterminate = selectedCount > 0 && selectedCount < currentIds.length;
+        }
+
+        async function exportSelectedData(type) {
+            const rows = Array.from(selectedExportRows[type].values());
+            if (!rows.length) {
+                displayError('请至少选择一条需要导出的数据');
+                return;
+            }
+
+            const button = document.getElementById(`${type}ExportButton`);
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+            try {
+                button.disabled = true;
+                const response = await fetch('/LabDatabase/exportSelectedData', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken,
+                    },
+                    body: JSON.stringify({ type, records: rows }),
+                });
+
+                if (!response.ok) {
+                    const responseText = await response.text();
+                    let errorData = null;
+                    try { errorData = JSON.parse(responseText); } catch (error) { /* non-JSON error */ }
+                    throw new Error(getApiErrorMessage(errorData, `导出失败（HTTP ${response.status}）`));
+                }
+
+                const blob = await response.blob();
+                const downloadUrl = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.download = `${type}_selected_data.xlsx`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(downloadUrl);
+            } catch (error) {
+                displayError(`导出失败：${error.message}`);
+            } finally {
+                updateExportControls(type);
+            }
+        }
+
+        async function loadPartExperienceAvailability(items) {
+            await Promise.all(items.map(async item => {
+                item.experienceAvailable = false;
+                try {
+                    const response = await fetch(
+                        `/LabDatabase/FetchExperienceDetail/${encodeURIComponent(item.name)}?check_only=1`
+                    );
+                    const responseText = await response.text();
+                    let data = null;
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (error) {
+                        return;
+                    }
+                    item.experienceAvailable = Boolean(
+                        response.ok && data.success && data.available
+                    );
+                } catch (error) {
+                    console.error(`获取 Part ${item.name} 的外部数据失败`, error);
+                }
+            }));
+        }
+
+        function renderPartExperienceCell(item) {
+            if (!item.experienceAvailable) {
+                return '<td><span class="text-muted">无数据</span></td>';
+            }
+            const detailUrl = `/LabDatabase/FetchExperienceDetail/${encodeURIComponent(item.name)}`;
+            return `<td><button type="button" class="btn btn-sm btn-outline-primary" onclick="window.location.href='${detailUrl}'">查看数据</button></td>`;
+        }
+
         // 渲染表格
         function renderTable(type,isSearch,page) {
             console.log("renderTable");
+            currentExportRows[type].clear();
+            updateExportControls(type);
             const tableBody = document.getElementById(`${type}TableBody`);
             const pagination = document.getElementById(`${type}Pagination`);
             const paginationInfo = document.getElementById(`${type}PaginationInfo`);
@@ -1353,8 +1474,9 @@ function setupMenuEvents() {
                 if(type === 'part'){
                     fetch(`/LabDatabase/getdata?type=part&page=${page}`)
                     .then(response => response.json())
-                    .then(data =>{
+                    .then(async data =>{
                         result = data.data;
+                        await loadPartExperienceAvailability(result);
                         totalItems = data.pagination.total_count;
                         totalPages = data.pagination.total_pages;
                         currentPage = data.pagination.current_page;
@@ -1364,7 +1486,7 @@ function setupMenuEvents() {
                         if (totalItems === 0) {
                             tableBody.innerHTML = `
                             <tr>
-                                <td colspan="7">
+                                <td colspan="8">
                                     <div class="empty-state">
                                         <div class="empty-icon">📭</div>
                                         <div>没有找到数据</div>
@@ -1394,12 +1516,13 @@ function setupMenuEvents() {
                                 }
                                 row.setAttribute("id", `part_row_${item.partid}`)
                                 row.innerHTML = `
+                                    ${renderExportCheckbox('part', item)}
                                     <td>${item.name}</td>
                                     <td>${item.alias}</td>
                                     <td>${PartType}</td>
                                     <td>${item.sourceorganism}</td>
-                                    <td>${item.reference}</td>
                                     <td><span class="status-badge ${item.tag === 'normal' ? 'status-active' : 'status-inactive'}">${item.tag === 'normal' ? '正常' : '非正常'}</span></td>
+                                    ${renderPartExperienceCell(item)}
                                     <td class="action-cell">
                                         <button class="btn btn-sm btn-outline-primary" onclick="window.location.href='/LabDatabase/part/${item.partid}'">查看</button>
                                         <button class="btn btn-sm btn-outline-secondary" onclick="window.location.href='/LabDatabase/modifypart/${item.partid}'">编辑</button>
@@ -1473,7 +1596,7 @@ function setupMenuEvents() {
                         if (totalItems === 0) {
                             tableBody.innerHTML = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="9">
                                         <div class="empty-state">
                                             <div class="empty-icon">📭</div>
                                             <div>没有找到数据</div>
@@ -1486,6 +1609,7 @@ function setupMenuEvents() {
                                 const row = document.createElement('tr');
                                 row.setAttribute("id", `backbone_row_${item.id}`)
                                 row.innerHTML = `
+                                    ${renderExportCheckbox('backbone', item)}
                                     <td>${item.name}</td>
                                     <td>${item.alias}</td>
                                     <td>${item.marker.join(", ")}</td>
@@ -1565,7 +1689,7 @@ function setupMenuEvents() {
                         if (totalItems === 0) {
                             tableBody.innerHTML = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="10">
                                         <div class="empty-state">
                                             <div class="empty-icon">📭</div>
                                             <div>没有找到数据</div>
@@ -1580,6 +1704,7 @@ function setupMenuEvents() {
                                 const oriList = ensureArray(item.ori_info);
                                 const markerList = ensureArray(item.marker_info);
                                 row.innerHTML = `
+                                    ${renderExportCheckbox('plasmid', item)}
                                     <td>${item.name}</td>
                                     <td>${item.alias}</td>
                                     <td>${oriList.join(", ") || "-"}</td>
@@ -1666,9 +1791,10 @@ function setupMenuEvents() {
                         },
                     })
                     .then(response => response.json())
-                    .then(data =>{
+                    .then(async data =>{
                         if(data.success){
                             result = data.data;
+                            await loadPartExperienceAvailability(result);
                             totalItems = data.pagination.total_count;
                             totalPages = data.pagination.total_pages;
                             currentPage = data.pagination.current_page;
@@ -1678,7 +1804,7 @@ function setupMenuEvents() {
                             if (totalItems === 0) {
                                 tableBody.innerHTML = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="8">
                                         <div class="empty-state">
                                             <div class="empty-icon">📭</div>
                                             <div>没有找到数据</div>
@@ -1708,12 +1834,13 @@ function setupMenuEvents() {
                                         PartType = "P+R";
                                     }
                                     row.innerHTML = `
+                                        ${renderExportCheckbox('part', item)}
                                         <td>${item.name}</td>
                                         <td>${item.alias}</td>
                                         <td>${PartType}</td>
                                         <td>${item.sourceorganism}</td>
-                                        <td>${item.reference}</td>
                                         <td><span class="status-badge ${item.tag === 'normal' ? 'status-active' : 'status-inactive'}">${item.tag === 'normal' ? '正常' : '非正常'}</span></td>
+                                        ${renderPartExperienceCell(item)}
                                         <td class="action-cell">
                                             <button class="btn btn-sm btn-outline-primary"  onclick="window.location.href='/LabDatabase/part/${item.partid}'">查看</button>
                                             <button class="btn btn-sm btn-outline-secondary" onclick="window.location.href='/LabDatabase/modifypart/${item.partid}'">编辑</button>
@@ -1826,7 +1953,7 @@ function setupMenuEvents() {
                         if (totalItems === 0) {
                             tableBody.innerHTML = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="9">
                                         <div class="empty-state">
                                             <div class="empty-icon">📭</div>
                                             <div>没有找到数据</div>
@@ -1839,6 +1966,7 @@ function setupMenuEvents() {
                                 const row = document.createElement('tr');
                                 row.setAttribute("id", `backbone_row_${item.id}`)
                                 row.innerHTML = `
+                                    ${renderExportCheckbox('backbone', item)}
                                     <td>${item.name}</td>
                                     <td>${item.alias}</td>
                                     <td>${item.marker.join(", ")}</td>
@@ -1906,7 +2034,7 @@ function setupMenuEvents() {
                             tableBody.innerHTML = '';
                             tableBody.innerHTML = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="10">
                                         <div class="empty-state">
                                             <div class="empty-icon">📭</div>
                                             <div>没有找到数据</div>
@@ -1970,6 +2098,7 @@ function setupMenuEvents() {
                                 const row = document.createElement('tr');
                                 row.setAttribute("id", `plasmid_row_${item.plasmidid}`)
                                 row.innerHTML = `
+                                    ${renderExportCheckbox('plasmid', item)}
                                     <td>${item.name}</td>
                                     <td>${item.alias}</td>
                                     <td>${ensureArray(item.ori_info).join(", ") || "-"}</td>
@@ -2153,97 +2282,78 @@ function setupMenuEvents() {
             });
         }
 
-        function DeletePart(partid){
+        async function DeletePart(partid){
             const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
             var confirmDelete = confirm("确定要删除吗？");
             if( !confirmDelete){
-                event.preventDefault();
+                return;
             }
             else{
-                let request_body = {"partid":partid}
-
-                fetch(`/LabDatabase/deletepart`,{
-                    method:'POST',
-                    body:JSON.stringify(request_body),
-                    headers:{
-                        'X-CSRFToken':csrfToken,
-                        'Content-Type':"application/json",
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if(data.success){
-                        alert("删除成功");
-                        document.getElementById(`part_row_${partid}`).remove();
-
-                    }
-                    else{
-                        alert(data.message);
-                    }
-                });
+                try {
+                    await apiFetch(`/LabDatabase/deletepart`, {
+                        method: 'POST',
+                        body: JSON.stringify({"partid":partid}),
+                        headers: {
+                            'X-CSRFToken':csrfToken,
+                            'Content-Type':"application/json",
+                        },
+                    });
+                    alert("删除成功");
+                    document.getElementById(`part_row_${partid}`)?.remove();
+                } catch (error) {
+                    displayError(`删除 Part 失败：${error.message}`);
+                }
             }
-            
         }
 
-        function DeleteBackbone(Backboneid){
+        async function DeleteBackbone(Backboneid){
             const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
             var confirmDelete = confirm("确定要删除吗？");
             if( !confirmDelete){
-                event.preventDefault();
+                return;
             }
             else{
-                let request_body = {"backboneid":Backboneid}
-                fetch(`/LabDatabase/deletebackbone`,{
-                    method:'POST',
-                    body:JSON.stringify(request_body),
-                    headers:{
-                        'X-CSRFToken':csrfToken,
-                        'Content-Type':"application/json",
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if(data.success){
-                        alert("删除成功");
-                        document.getElementById(`backbone_row_${Backboneid}`).remove();
-
-                    }
-                    else{
-                        alert(data.message);
-                    }
-                });
+                try {
+                    await apiFetch(`/LabDatabase/deletebackbone`, {
+                        method: 'POST',
+                        body: JSON.stringify({"backboneid":Backboneid}),
+                        headers: {
+                            'X-CSRFToken':csrfToken,
+                            'Content-Type':"application/json",
+                        },
+                    });
+                    alert("删除成功");
+                    document.getElementById(`backbone_row_${Backboneid}`)?.remove();
+                } catch (error) {
+                    displayError(`删除 Backbone 失败：${error.message}`);
+                }
             }
         }
-        
-        function DeletePlasmid(Plasmidid){
+
+        async function DeletePlasmid(Plasmidid){
             const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
             var confirmDelete = confirm("确定要删除吗？");
             if( !confirmDelete){
-                event.preventDefault();
+                return;
             }
             else{
-                let request_body = {"Plasmidid":Plasmidid, "CurrentPath":window.location.href}
-                fetch(`/LabDatabase/deleteplasmid`,{
-                    method:'POST',
-                    body:JSON.stringify(request_body),
-                    headers:{
-                        'X-CSRFToken':csrfToken,
-                        'Content-Type':"application/json",
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if(data.success){
-                        alert("删除成功");
-                        document.getElementById(`plasmid_row_${Plasmidid}`).remove();
-                    }
-                    else{
-                        alert(data.message);
-                    }
-                });
+                try {
+                    await apiFetch(`/LabDatabase/deleteplasmid`, {
+                        method: 'POST',
+                        body: JSON.stringify({"Plasmidid":Plasmidid, "CurrentPath":window.location.href}),
+                        headers: {
+                            'X-CSRFToken':csrfToken,
+                            'Content-Type':"application/json",
+                        },
+                    });
+                    alert("删除成功");
+                    document.getElementById(`plasmid_row_${Plasmidid}`)?.remove();
+                } catch (error) {
+                    displayError(`删除 Plasmid 失败：${error.message}`);
+                }
             }
         }
 

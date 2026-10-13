@@ -1,4 +1,3 @@
-from django.conf import settings
 # sbol_graphics.py
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -734,7 +733,7 @@ feature_size = {"promoter":0.04,"cds":0.05,"terminator":0.04,"rep_origin":0.04,"
 def generate_plasmid_view(request, repositoryName):
     """生成质粒图谱的视图"""
     
-    Assembly_File_Address = settings.ASSEMBLY_OUTPUT_DIR
+    Assembly_File_Address = r"C:\Users\admin\Desktop\WebDatabase\WebDataWorld\output"
     file_address = os.path.join(Assembly_File_Address,f"{repositoryName}.gb")
     if(os.path.exists(file_address)):
         records = parse(file_address, "genbank")

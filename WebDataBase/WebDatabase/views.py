@@ -1,7 +1,4 @@
-from django.urls import reverse
-from WebDataWorld.runtime import page_size as bounded_page_size
-from .part_types import PartType
-import django.core.exceptions
+﻿import django.core.exceptions
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.core import serializers
@@ -13,6 +10,8 @@ import re
 from datetime import datetime, timedelta
 from django.db import transaction, IntegrityError
 import time
+import requests
+from requests.adapters import HTTPAdapter
 from django.utils import timezone
 from django.conf import settings
 # from datetime import datetime
@@ -21,7 +20,7 @@ from django.db.models import Q
 from django.utils.deprecation import MiddlewareMixin
 from .models import (Backbonetable,Parentplasmidtable,
                     Partrputable,Parttable,Plasmidneed,
-                    Straintable,TbBackboneUserfileaddress,
+                    Straintable,StrainGenotypeTable,TbBackboneUserfileaddress,
                     TbPartUserfileaddress,TbPlasmidUserfileaddress, Temporaryrepository,
                     Testdatatable,CustomUser,Lbdnrtable,Lbddimertable,Dbdtable,Parentbackbonetable,\
                     Parentparttable, Partscartable, Backbonescartable, Plasmidscartable, \
@@ -38,11 +37,165 @@ from .logger import request_logger
 from .exceptions import WebDatabaseException,WebDatabaseConflictException,WebDatabasePermissionException,\
                         WebDatabaseNotFoundException,WebDatabaseServerException,WebDatabaseValidationException,\
                         WebDatabaseGETMethodException,WebDatabasePOSTMethodException,WebDatabaseTimeoutException
+from .feature_sanitizer import sanitize_feature_text
 
 # print(getattr(settings,"TIME_ZONE"))
 tz = pytz.timezone(getattr(settings,"TIME_ZONE"))
 timezone.activate(tz)
 # print(timezone.localtime(timezone.now()))
+
+PART_NAME_EXTERNAL_API = settings.GPCS_BASE_URL + "/api/part/view"
+PART_NAME_ALLOWED_PATTERN = re.compile(r"^[\w()+-]+$", re.UNICODE)
+GPCS_TIMEOUT = (2, 5)
+GPCS_MAX_ATTEMPTS = 3
+GPCS_RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+GPCS_RETRY_BACKOFF_SECONDS = 0.5
+logger = logging.getLogger(__name__)
+
+
+def _build_gpcs_session():
+    adapter = HTTPAdapter(max_retries=0, pool_connections=10, pool_maxsize=20)
+    session = requests.Session()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+GPCS_SESSION = _build_gpcs_session()
+
+
+def _gpcs_log(level, task_id, name, elapsed_ms, attempt, exception_type="", status_code=None):
+    getattr(logger, level)(
+        "GPCS part lookup task_id=%s part_name=%s elapsed_ms=%.1f attempt=%s/%s "
+        "exception_type=%s status_code=%s",
+        task_id or "-",
+        name,
+        elapsed_ms,
+        attempt,
+        GPCS_MAX_ATTEMPTS,
+        exception_type or "-",
+        status_code if status_code is not None else "-",
+    )
+
+
+def _query_gpcs_part(name, task_id=None):
+    last_exception = None
+    for attempt in range(1, GPCS_MAX_ATTEMPTS + 1):
+        started_at = time.monotonic()
+        try:
+            response = GPCS_SESSION.get(
+                PART_NAME_EXTERNAL_API,
+                params={"filter": f"name={name}"},
+                timeout=GPCS_TIMEOUT,
+            )
+            elapsed_ms = (time.monotonic() - started_at) * 1000
+            response.raise_for_status()
+            _gpcs_log("info", task_id, name, elapsed_ms, attempt, status_code=response.status_code)
+            return response
+        except requests.RequestException as exc:
+            last_exception = exc
+            elapsed_ms = (time.monotonic() - started_at) * 1000
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            retryable = status_code is None or status_code in GPCS_RETRYABLE_STATUS_CODES
+            _gpcs_log(
+                "warning",
+                task_id,
+                name,
+                elapsed_ms,
+                attempt,
+                type(exc).__name__,
+                status_code,
+            )
+            if not retryable or attempt == GPCS_MAX_ATTEMPTS:
+                raise
+            time.sleep(GPCS_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+    raise last_exception
+
+
+def _gpcs_degraded_warning(name, reason, task_id=None):
+    logger.warning(
+        "GPCS validation degraded task_id=%s part_name=%s exception_type=%s",
+        task_id or "-",
+        name,
+        type(reason).__name__,
+    )
+    return (
+        f"GPCS 名称检验服务暂时不可用，元件 {name} 已按本地规则继续处理，"
+        "请稍后补充校验"
+    )
+
+
+def _normalize_part_sequence(sequence):
+    """Normalize sequence formatting before storing or comparing Part sequences."""
+    return "".join(str(sequence or "").split()).upper()
+
+
+def _validate_uploaded_part_name(name, sequence="", task_id=None):
+    """Validate a Part name and warn about external name/sequence conflicts."""
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise WebDatabaseValidationException(parameter="name")
+    if not PART_NAME_ALLOWED_PATTERN.fullmatch(normalized_name):
+        raise WebDatabaseValidationException(
+            parameter="name（仅允许中文、英文字母、数字、下划线、连字符、加号和括号，不能包含 /、.、*、# 等符号）"
+        )
+
+    try:
+        response = _query_gpcs_part(normalized_name, task_id=task_id)
+    except requests.RequestException as exc:
+        return normalized_name, _gpcs_degraded_warning(normalized_name, exc, task_id=task_id)
+    try:
+        response_data = response.json()
+    except ValueError as exc:
+        return normalized_name, _gpcs_degraded_warning(normalized_name, exc, task_id=task_id)
+    if not isinstance(response_data, dict):
+        return normalized_name, _gpcs_degraded_warning(normalized_name, ValueError("返回值不是 JSON 对象"), task_id=task_id)
+
+    external_items = response_data.get("items")
+    if external_items is None:
+        external_items = response_data.get("item")
+    if external_items is None:
+        external_items = response_data.get("parts")
+    if external_items is None:
+        return normalized_name, _gpcs_degraded_warning(normalized_name, ValueError("返回值缺少 items/item/parts"), task_id=task_id)
+    if not isinstance(external_items, list):
+        external_items = [external_items] if external_items else []
+
+    warning = ""
+    if not external_items:
+        warning = f"提示：外部系统未检索到名称 {normalized_name}，建议确认名称是否正确"
+    else:
+        external_part = external_items[0]
+        if isinstance(external_part, dict):
+            external_sequence = next(
+                (
+                    external_part.get(field)
+                    for field in (
+                        "sequence",
+                        "Sequence",
+                        "seq",
+                        "Seq",
+                        "level0sequence",
+                        "Level0Sequence",
+                    )
+                    if external_part.get(field) is not None
+                ),
+                None,
+            )
+            uploaded_sequence = _normalize_part_sequence(sequence)
+            normalized_external_sequence = _normalize_part_sequence(external_sequence)
+            if (
+                uploaded_sequence
+                and normalized_external_sequence
+                and uploaded_sequence != normalized_external_sequence
+            ):
+                warning = (
+                    f"提示：外部系统中名称 {normalized_name} 已存在，但上传序列与外部序列不一致，"
+                    "建议更改名称"
+                )
+    return normalized_name, warning
+
+
 def _build_or_keyword_query(raw_keywords, fields):
     """
     Build AND fuzzy query from whitespace-separated keywords.
@@ -131,10 +284,10 @@ def _build_upload_record_query(filter_expr):
 class User_auth(MiddlewareMixin):
     
     def process_request(self,request):
-        request.start_time = time.monotonic()
+        request.start_time = time.time()
         try:
             #鎺掗櫎涓嶉渶瑕佺櫥褰曞氨鑳借闂殑椤甸潰
-            if request.path_info == reverse("api:login") or request.path_info == reverse("api:register") or request.path_info == reverse("api:AdminRegister") or request.path_info == reverse("api:resetpassword"):
+            if request.path_info == "/WebDatabase/login" or request.path_info == "/WebDatabase/register" or request.path_info == "/WebDatabase/AdminRegister" or request.path_info == "/WebDatabase/reset":
                 return
             info = request.session.get('info')
             #temp
@@ -144,17 +297,17 @@ class User_auth(MiddlewareMixin):
             if user:
                 return
             else:
-                return redirect('api:login')
+                return redirect('/WebDatabase/login')
             # if not info:
-            #     return redirect('api:login')
+            #     return redirect('/WebDatabase/login')
             # else:
             #     return
         except Exception as e:
             return
 
     def process_response(self,request,response):
-        final_time = time.monotonic()
-        duration_time = time.monotonic() - request.start_time
+        final_time = time.time()
+        duration_time = time.time() - request.start_time
         request_logger.request_log(
             request, response, duration_time
         )
@@ -163,9 +316,7 @@ class User_auth(MiddlewareMixin):
         if(isinstance(exception, WebDatabaseException)):
             return exception.to_response()
         elif(isinstance(exception, Exception)):
-            print('777')
-            print(str(exception))
-            return JsonResponse(data={"success":False, "message":str(exception)},status=400,safe=False)
+            return JsonResponse(data={"success":False, "message":str(exception)},status=500,safe=False)
         return None
     # if not info:
     #     return JsonResponse({'status': 'Not logged in'})
@@ -195,7 +346,10 @@ def SearchByStrainName(request):
             # return JsonResponse(data="Name cannot be empty", status=400,safe=False)
         StrainList = Straintable.objects.filter(strainname=Name)
         if(len(StrainList) > 0):
-            return JsonResponse(data=list(StrainList.values()), status=200,safe=False)
+            strain_data = list(StrainList.values())
+            for item in strain_data:
+                item["phenotype"] = item.pop("phenotype", "")
+            return JsonResponse(data=strain_data, status=200,safe=False)
             # return JsonResponse({'code':200,'status': 'success', 'data': list(StrainList.values())})
         else:
             raise WebDatabaseNotFoundException()
@@ -203,6 +357,269 @@ def SearchByStrainName(request):
             # return JsonResponse({'code':204,'status': 'failed', 'data': "Strain Not Found"})
     else:
         raise WebDatabaseGETMethodException()
+
+
+def _strain_data(strain):
+    genotypes = list(
+        StrainGenotypeTable.objects.filter(strainid=strain)
+        .select_related("plasmidid")
+        .order_by("sgid")
+        .values("sgid", "plasmidid_id", "plasmidid__name")
+    )
+    return {
+        "strainid": strain.strainid,
+        "strainname": strain.strainname,
+        "background": strain.background,
+        "marker": strain.marker,
+        "store": strain.store,
+        "phenotype": strain.phenotype,
+        "genotypes": [
+            {
+                "sgid": item["sgid"],
+                "plasmidid": item["plasmidid_id"],
+                "plasmidname": item["plasmidid__name"],
+            }
+            for item in genotypes
+        ],
+    }
+
+
+@csrf_exempt
+def StrainCollection(request):
+    if request.method == "GET":
+        keyword = str(request.GET.get("search", "")).strip()
+        strains = Straintable.objects.all().order_by("strainname", "strainid")
+        if keyword:
+            strains = strains.filter(
+                Q(strainname__icontains=keyword)
+                | Q(background__icontains=keyword)
+                | Q(marker__icontains=keyword)
+                | Q(store__icontains=keyword)
+                | Q(phenotype__icontains=keyword)
+            )
+        return JsonResponse({"success": True, "data": [_strain_data(item) for item in strains]})
+
+    if request.method == "POST":
+        data = json.loads(request.body or b"{}")
+        values = {
+            field: str(data.get(field, "")).strip()
+            for field in ("strainname", "background", "marker", "store")
+        }
+        values["phenotype"] = str(data.get("phenotype", "")).strip()
+        if not all(values.values()):
+            raise WebDatabaseValidationException(parameter="strainname/background/marker/store/phenotype")
+        strain = Straintable.objects.create(**values)
+        return JsonResponse({"success": True, "data": _strain_data(strain)}, status=201)
+
+    return JsonResponse({"success": False, "message": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def StrainDetail(request, strainid):
+    try:
+        strain = Straintable.objects.get(strainid=strainid)
+    except Straintable.DoesNotExist:
+        raise WebDatabaseNotFoundException()
+
+    if request.method == "GET":
+        return JsonResponse({"success": True, "data": _strain_data(strain)})
+
+    if request.method in ("PUT", "PATCH"):
+        data = json.loads(request.body or b"{}")
+        for field in ("strainname", "background", "marker", "store"):
+            if field in data:
+                value = str(data[field]).strip()
+                if not value:
+                    raise WebDatabaseValidationException(parameter=field)
+                setattr(strain, field, value)
+        if "phenotype" in data:
+            phenotype = str(data["phenotype"]).strip()
+            if not phenotype:
+                raise WebDatabaseValidationException(parameter="phenotype")
+            strain.phenotype = phenotype
+        strain.save()
+        return JsonResponse({"success": True, "data": _strain_data(strain)})
+
+    if request.method == "DELETE":
+        strain.delete()
+        return JsonResponse({"success": True})
+
+    return JsonResponse({"success": False, "message": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def StrainGenotypeCollection(request):
+    if request.method == "GET":
+        genotype_list = StrainGenotypeTable.objects.select_related(
+            "strainid", "plasmidid"
+        ).order_by("sgid")
+        strainid = request.GET.get("strainid")
+        if strainid:
+            genotype_list = genotype_list.filter(strainid_id=strainid)
+        data = [
+            {
+                "sgid": item.sgid,
+                "strainid": item.strainid_id,
+                "strainname": item.strainid.strainname,
+                "plasmidid": item.plasmidid_id,
+                "plasmidname": item.plasmidid.name,
+            }
+            for item in genotype_list
+        ]
+        return JsonResponse({"success": True, "data": data})
+
+    if request.method == "POST":
+        data = json.loads(request.body or b"{}")
+        strainid = data.get("strainid")
+        plasmidid = data.get("plasmidid")
+        if not strainid or not plasmidid:
+            raise WebDatabaseValidationException(parameter="strainid/plasmidid")
+        try:
+            strain = Straintable.objects.get(strainid=strainid)
+            plasmid = Plasmidneed.objects.get(plasmidid=plasmidid)
+        except (Straintable.DoesNotExist, Plasmidneed.DoesNotExist):
+            raise WebDatabaseNotFoundException()
+        genotype, created = StrainGenotypeTable.objects.get_or_create(
+            strainid=strain, plasmidid=plasmid
+        )
+        return JsonResponse(
+            {
+                "success": True,
+                "created": created,
+                "data": {
+                    "sgid": genotype.sgid,
+                    "strainid": genotype.strainid_id,
+                    "plasmidid": genotype.plasmidid_id,
+                },
+            },
+            status=201 if created else 200,
+        )
+
+    return JsonResponse({"success": False, "message": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def StrainGenotypeDetail(request, sgid):
+    try:
+        genotype = StrainGenotypeTable.objects.get(sgid=sgid)
+    except StrainGenotypeTable.DoesNotExist:
+        raise WebDatabaseNotFoundException()
+
+    if request.method == "GET":
+        return JsonResponse({
+            "success": True,
+            "data": {
+                "sgid": genotype.sgid,
+                "strainid": genotype.strainid_id,
+                "plasmidid": genotype.plasmidid_id,
+            },
+        })
+
+    if request.method in ("PUT", "PATCH"):
+        data = json.loads(request.body or b"{}")
+        try:
+            if "strainid" in data:
+                genotype.strainid = Straintable.objects.get(strainid=data["strainid"])
+            if "plasmidid" in data:
+                genotype.plasmidid = Plasmidneed.objects.get(plasmidid=data["plasmidid"])
+        except (Straintable.DoesNotExist, Plasmidneed.DoesNotExist):
+            raise WebDatabaseNotFoundException()
+        genotype.save()
+        return JsonResponse({"success": True})
+
+    if request.method == "DELETE":
+        genotype.delete()
+        return JsonResponse({"success": True})
+
+    return JsonResponse({"success": False, "message": "Method not allowed"}, status=405)
+
+@csrf_exempt
+def SyncStrain(request):
+    """Atomically upsert a strain and synchronize all plasmid genotype links."""
+    if request.method not in ("POST", "PUT"):
+        return JsonResponse({"success": False, "message": "Method not allowed"}, status=405)
+
+    data = json.loads(request.body or b"{}")
+    strainname = str(data.get("strainname", "")).strip()
+    raw_plasmid_names = data.get("genotype", [])
+    if not strainname:
+        raise WebDatabaseValidationException(parameter="strainname")
+    if raw_plasmid_names in (None, ""):
+        raw_plasmid_names = []
+    if not isinstance(raw_plasmid_names, list):
+        raise WebDatabaseValidationException(parameter="genotype")
+
+    plasmid_names = list(
+        dict.fromkeys(str(value).strip() for value in raw_plasmid_names if str(value).strip())
+    )
+    plasmids = {
+        item.name: item
+        for item in Plasmidneed.objects.filter(name__in=plasmid_names)
+    }
+    missing_names = [item for item in plasmid_names if item not in plasmids]
+    if missing_names:
+        return JsonResponse(
+            {
+                "success": False,
+                "message": "Plasmid not found",
+                "missing_plasmids": missing_names,
+            },
+            status=404,
+        )
+
+    with transaction.atomic():
+        try:
+            strain = Straintable.objects.select_for_update().get(strainname=strainname)
+            created = False
+        except Straintable.DoesNotExist:
+            strain = Straintable()
+            created = True
+
+        for field in ("strainname", "background", "marker", "store","phenotype"):
+            if field in data:
+                value = str(data[field]).strip()
+                if not value:
+                    raise WebDatabaseValidationException(parameter=field)
+                setattr(strain, field, value)
+            elif created:
+                raise WebDatabaseValidationException(parameter=field)
+        if "phenotype" in data:
+            phenotype = str(data["phenotype"]).strip()
+            if not phenotype:
+                raise WebDatabaseValidationException(parameter="phenotype")
+            strain.phenotype = phenotype
+        elif created:
+            raise WebDatabaseValidationException(parameter="phenotype")
+        strain.save()
+
+        genotype_query = StrainGenotypeTable.objects.select_for_update().filter(
+            strainid=strain
+        )
+        existing_ids = set(genotype_query.values_list("plasmidid_id", flat=True))
+        requested_ids = {plasmid.plasmidid for plasmid in plasmids.values()}
+        deleted_count, _ = genotype_query.exclude(
+            plasmidid_id__in=requested_ids
+        ).delete()
+        new_ids = requested_ids - existing_ids
+        plasmids_by_id = {item.plasmidid: item for item in plasmids.values()}
+        StrainGenotypeTable.objects.bulk_create(
+            [
+                StrainGenotypeTable(strainid=strain, plasmidid=plasmids_by_id[item])
+                for item in new_ids
+            ]
+        )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "created": created,
+            "added_genotypes": len(new_ids),
+            "deleted_genotypes": deleted_count,
+            "data": _strain_data(strain),
+        },
+        status=201 if created else 200,
+    )
+
 
 #-------------------------------------------------------------
 #Part Table
@@ -272,7 +689,7 @@ def PartDataALL(request):
                 # return JsonResponse(data="No such part", status=404,safe=False)
                 # return JsonResponse({'code':204,'status': 'failed', 'data': []})
         else:
-            page_size = bounded_page_size(request.GET.get('page_size'))
+            page_size = int(request.GET.get('page_size',10))
             offset = (page -1)*page_size
             total_count = Parttable.objects.count()
             total_pages = (total_count + page_size -1) // page_size
@@ -312,17 +729,17 @@ def PartFilter(request):
         Scar = data['Scar']
         name = data['name']
         page = data['page']
-        page_size = bounded_page_size(data.get('page_size'))
+        page_size = data['page_size']
         offset = (page - 1) * page_size
         if(type != ""):
             if(type.lower() == "promoter"):
-                type=PartType.PROMOTER
+                type = 1
             elif(type.lower() == "terminator"):
-                type=PartType.TERMINATOR
+                type = 3
             elif(type.lower() == "rbs"):
-                type=PartType.RBS
+                type = 4
             elif(type.lower() == "cds"):
-                type=PartType.CDS
+                type = 2
             elif(type.lower() == "p+r"):
                 type = 5
         scarpartid = []
@@ -467,7 +884,7 @@ def SearchByPartNameFilter(request):
                 keyword_query = _build_or_keyword_query(Name, ["name", "alias"])
                 if keyword_query is not None:
                     result = result.filter(keyword_query)
-                promoterResult = list(result.values('partid','name','sourceorganism','reference'))
+                promoterResult = list(result.values('partid','name','alias','level0sequence','sourceorganism','reference'))
                 if(len(promoterResult[0]) > 0):
                     return JsonResponse(data=promoterResult,status=200,safe=False)
                 else:
@@ -646,13 +1063,13 @@ def SearchByPartType(request):
             # return JsonResponse(data="Type cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': "Type cannot be empty"})
         if(Type.lower() == "promoter"):
-            PartList = Parttable.objects.filter(type=PartType.PROMOTER)
+            PartList = Parttable.objects.filter(type=1)
         elif(Type.lower() == "terminator"):
-            PartList = Parttable.objects.filter(type=PartType.TERMINATOR)
+            PartList = Parttable.objects.filter(type=3)
         elif(Type.lower() == "cds"):
-            PartList = Parttable.objects.filter(type=PartType.CDS)
+            PartList = Parttable.objects.filter(type=2)
         elif(Type.lower() == "rbs"):
-            PartList = Parttable.objects.filter(type=PartType.RBS)
+            PartList = Parttable.objects.filter(type=4)
         else:
             PartList = Parttable.objects.filter(type=5)
         if(len(PartList) > 0):
@@ -685,17 +1102,17 @@ def SearchPartTypeByName(request):
             # return JsonResponse({'code':204,'status': 'failed', 'data': "Name cannot be empty"})
         Type = Parttable.objects.filter(name=Name).first().type
         if(Type != None):
-            if(Type == PartType.PROMOTER):
+            if(Type == 1):
                 return JsonResponse(data={"Type":"Promoter"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type":"Promoter"}})
-            elif(Type == PartType.CDS):
+            elif(Type == 2):
                 return JsonResponse(data={"Type":"CDS"},status=200)
                 # return JsonResponse({'code':200,'status':'success','data':{"Type":"Terminator"}})
-            elif(Type == PartType.TERMINATOR):
+            elif(Type == 3):
                 # return HttpResponse("CDS")
                 return JsonResponse(data={"Type":"Terminator"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type": "CDS"}})
-            elif(Type == PartType.RBS):
+            elif(Type == 4):
                 return JsonResponse(data={"Type":"RBS"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type": "RBS"}})
             else:
@@ -729,17 +1146,17 @@ def SearchPartTypeByID(request):
             # return JsonResponse({'code':204,'status': 'failed', 'data': "Name cannot be empty"})
         Type = Parttable.objects.filter(partid=ID).first().type
         if(Type != None):
-            if(Type == PartType.PROMOTER):
+            if(Type == 1):
                 return JsonResponse(data={"Type":"Promoter"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type":"Promoter"}})
-            elif(Type == PartType.TERMINATOR):
+            elif(Type == 3):
                 return JsonResponse(data={"Type":"Terminator"},status=200)
                 # return JsonResponse({'code':200,'status':'success','data':{"Type":"Terminator"}})
-            elif(Type == PartType.CDS):
+            elif(Type == 2):
                 # return HttpResponse("CDS")
                 return JsonResponse(data={"Type":"CDS"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type": "CDS"}})
-            elif(Type == PartType.RBS):
+            elif(Type == 4):
                 return JsonResponse(data={"Type":"RBS"},status=200)
                 # return JsonResponse({'code':200,'status': 'success', 'data': {"Type": "RBS"}})
             else:
@@ -812,7 +1229,7 @@ def GetPartRPU(request):
         if(len(PartRPUList) > 0):
             return JsonResponse(data=list(PartRPUList.values()),status=200,safe=False)
         else:
-            raise WebDatabaseNotFoundException()
+            return JsonResponse(data=[],status=200,safe=False)
     raise WebDatabaseGETMethodException()
 
 
@@ -920,14 +1337,12 @@ def AddPartData(request):
     if(request.method == "POST"):
         data = json.loads(request.body)
         # print(data)
-        name = data['name']
+        name, name_warning = _validate_uploaded_part_name(
+            data.get('name'), data.get('Level0Sequence', '')
+        )
         alias = data['alias']
-        if(data['Level0Sequence'] != ""):
-            length = len(data['Level0Sequence'])
-            level0Seq = data['Level0Sequence']
-        else:
-            length = 0
-            level0Seq = ""
+        level0Seq = _normalize_part_sequence(data['Level0Sequence'])
+        length = len(level0Seq)
         ConfirmedSequence = data['ConfirmedSequence'] if'ConfirmedSequence' in data else ""
         InsertSequence = data['InsertSequence'] if 'InsertSequence' in data else ""
         sourceOrganism = data['source'] if 'source' in data else ""
@@ -937,39 +1352,40 @@ def AddPartData(request):
         if(type == None or type == ""):
             raise WebDatabaseValidationException(parameter = "type")
         if(type.lower() == "promoter"):
-            type=PartType.PROMOTER
+            type = 1
         elif(type.lower() == "terminator"):
-            type=PartType.TERMINATOR
+            type = 3
         elif(type.lower() == "cds"):
-            type=PartType.CDS
+            type = 2
         elif(type.lower() == "rbs"):
-            type=PartType.RBS
+            type = 4
         elif(type.lower() == "p+r"):
             type = 5
         username = request.session['info']['uname']
-        if(name == "" or name == None):
-            raise WebDatabaseValidationException(parameter="name")
-            # return JsonResponse({'code':204,'status': 'failed', 'data': 'Name or Sequence can not be empty'})
         exist_part = Parttable.objects.filter(name__iexact=name).first()
         if(exist_part != None):
-            updateDate = timezone.localtime(timezone.now())
-            if(alias != ""):
-                exist_part.update(alias=alias)
-            if(length != 0):
-                exist_part.update(lengthinlevel0=length, level0sequence=level0Seq)
-            if(ConfirmedSequence != ""):
-                exist_part.update(confirmedsequence = ConfirmedSequence)
-            if(InsertSequence != ""):
-                exist_part.update(insertsequence = InsertSequence)
-            if(sourceOrganism != ""):
-                exist_part.update(sourceorganism = sourceOrganism)
-            if(reference != ""):
-                exist_part.update(reference = reference)
-            if(note != ""):
-                exist_part.update(note = note)
-            if(type != None):
-                exist_part.update(type = type)
-            exist_part.update(user=username, updatedate = updateDate)
+            with transaction.atomic():
+                part_obj = Parttable.objects.select_for_update().get(partid=exist_part.partid)
+                if(alias != ""):
+                    part_obj.alias = alias
+                if(length != 0):
+                    part_obj.lengthinlevel0 = length
+                    part_obj.level0sequence = level0Seq
+                if(ConfirmedSequence != ""):
+                    part_obj.confirmedsequence = ConfirmedSequence
+                if(InsertSequence != ""):
+                    part_obj.insertsequence = InsertSequence
+                if(sourceOrganism != ""):
+                    part_obj.sourceorganism = sourceOrganism
+                if(reference != ""):
+                    part_obj.reference = reference
+                if(note != ""):
+                    part_obj.note = note
+                if(type != None):
+                    part_obj.type = type
+                part_obj.user = username
+                part_obj.updatedate = timezone.localtime(timezone.now())
+                part_obj.save()
         else:
             uploadDate = timezone.localtime(timezone.now())
             updateDate = timezone.localtime(timezone.now())
@@ -980,7 +1396,11 @@ def AddPartData(request):
                                     uploaddate = uploadDate, updatedate = updateDate)
             except IntegrityError:
                 return JsonResponse(data={"success":False, "message":"Part name already exists"}, status=409, safe=False)
-        return JsonResponse(data={"success":True}, status=200,safe=False)
+        response_data = {"success": True}
+        if name_warning:
+            response_data["warning"] = name_warning
+            response_data["message"] = name_warning
+        return JsonResponse(data=response_data, status=200,safe=False)
         # return JsonResponse({'code':200,'status': 'success','data':'Part data added'})
     raise WebDatabasePOSTMethodException()
 
@@ -1045,8 +1465,8 @@ def UpdatePart(request):
         NewName = data['Name']
         NewAlias = data['Alias']
         NewType = data['Type']
-        NewLength = len(data['Level0Sequence'])
-        NewLevel0Sequence = data['Level0Sequence']
+        NewLevel0Sequence = _normalize_part_sequence(data['Level0Sequence'])
+        NewLength = len(NewLevel0Sequence)
         NewConfirmedSequence = data['ConfirmedSequence']
         NewInsertSequence = data['InsertSequence']
         NewSourceOrganism = data["source"]
@@ -1236,7 +1656,10 @@ def GetPartSource(request, partID):
     if(request.method == "GET"):
         try:
             source = Parttable.objects.get(partid = partID).sourceorganism
-            return JsonResponse(data={"success":True,"source":source},status=200,safe=False)
+            if source != None and source != "null":
+                return JsonResponse(data={"success":True,"source":source},status=200,safe=False)
+            else:
+                return JsonResponse(data={"success":True,"source":""},status=200,safe = False)
         except Parttable.DoesNotExist:
             raise WebDatabaseNotFoundException()
     else:
@@ -1330,7 +1753,7 @@ def PlasmidDataALL(request):
                 # return JsonResponse(data="No plasmid", status=404,safe=False)
                 # return JsonResponse({'code':204,'status': 'failed', 'data': []})
         else:
-            page_size = bounded_page_size(request.GET.get('page_size'))
+            page_size = int(request.GET.get('page_size',10))
             offset = (page -1)*page_size
             total_count = Plasmidneed.objects.count()
             total_pages = (total_count + page_size -1) // page_size
@@ -1379,7 +1802,7 @@ def PlasmidFilter(request):
         Enzyme = data['Enzyme']
         Scar = data['Scar']
         page = data['page']
-        page_size = bounded_page_size(data.get('page_size'))
+        page_size = data['page_size']
         offset = (page -1)*page_size
         scarplasmidid = []
         if(Enzyme == "BsmBI"):
@@ -2032,6 +2455,21 @@ def AddPlasmidFileAddress(request):
         raise WebDatabasePOSTMethodException()
     
     
+def _save_assembly_features(plasmid_obj, data):
+    if 'assembly_features' not in data:
+        return
+    from LabDatabase.feature_records import record_from_rows, normalized_record, feature_rows
+    features = data['assembly_features']
+    if not isinstance(features, list):
+        raise ValueError('assembly_features must be a list')
+    rows = feature_rows(normalized_record(record_from_rows(plasmid_obj.sequenceconfirm,
+        [r for r in features if isinstance(r, dict)], name=plasmid_obj.name)))
+    Plasmidfeaturetable.objects.filter(plasmidid=plasmid_obj).delete()
+    if rows:
+        Plasmidfeaturetable.objects.bulk_create([Plasmidfeaturetable(plasmidid=plasmid_obj, **r) for r in rows])
+
+
+@transaction.atomic
 def AddPlasmidData(request):
     """
     AddPlasmidData API view.
@@ -2075,9 +2513,10 @@ def AddPlasmidData(request):
         exist_plasmid = Plasmidneed.objects.filter(name__iexact=name).first()
         if(exist_plasmid == None):
             try:
-                Plasmidneed.objects.create(name=name, level = level, length = length, sequenceconfirm=sequence,
+                plasmid_obj = Plasmidneed.objects.create(name=name, level = level, length = length, sequenceconfirm=sequence,
                                    plate=plate, state = state, note=note, alias=alias,customparentinformation = ParentInfo,
                                    uploaddate = timezone.localtime(timezone.now()), updatedate = timezone.localtime(timezone.now()), user = username)
+                _save_assembly_features(plasmid_obj, data)
             except Exception as e:
                 # print(e.args)
                 raise e
@@ -2115,6 +2554,7 @@ def AddPlasmidData(request):
                     # plasmid_obj.tag = tag
                     # plasmid_obj.updatedate = timezone.localtime(timezone.now())
                     plasmid_obj.save()
+                    _save_assembly_features(plasmid_obj, data)
                 return JsonResponse(data={"success":True}, status=200,safe=False)
             except Exception as e:
                 raise e
@@ -2146,9 +2586,9 @@ def AddParentPlasmid(request):
             raise WebDatabaseValidationException(parameter = "ParentPlasmidName")
             # return JsonResponse(data="SonPlasmidName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.get(plasmidid = sonPlasmidid)
@@ -2159,11 +2599,11 @@ def AddParentPlasmid(request):
                         Parentplasmidtable.objects.create(sonplasmidid=sonPlasmidObj,parentplasmidid = parentPlasmidObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -2190,9 +2630,9 @@ def AddPlasmidParentByID(request):
             raise WebDatabaseValidationException(parameter="ParentPlasmidID")
             # return JsonResponse(data="SonPlasmidName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.select_for_update().get(name = sonPlasmidName)
@@ -2203,11 +2643,11 @@ def AddPlasmidParentByID(request):
                         Parentplasmidtable.objects.create(sonplasmidid=sonPlasmidObj,parentplasmidid = parentPlasmidObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -2364,7 +2804,7 @@ def GetUploadRecords(request):
         raise WebDatabaseException(message="table 只支持 parttable、backbonetable、plasmidneed")
     try:
         page = max(int(request.GET.get("page", 1)), 1)
-        page_size = bounded_page_size(request.GET.get("pagesize"), upload=True)
+        page_size = min(max(int(request.GET.get("pagesize", 100)), 1), 5000)
     except (TypeError, ValueError):
         raise WebDatabaseException(message="page 和 pagesize 必须为整数")
 
@@ -2523,10 +2963,7 @@ def deletePlasmidData(request):
             # return JsonResponse(data={"success":False, "message":"No such Plasmid"}, status=404,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Not Found'})
         plasmid_user = Plasmidneed.objects.get(plasmidid = PlasmidID).user
-        print("99999999999999999999999999999999999999")
-        print(plasmid_user == request.user.uname)
         if(plasmid_user != request.user.uname and plasmid_user != request.user.email):
-            
             raise WebDatabasePermissionException()
             # return JsonResponse(data = {"success":False, "message":"褰撳墠鐢ㄦ埛娌℃湁鍒犻櫎鏉冮檺锛岃鑱旂郴涓婁紶鐢ㄦ埛杩涜鍒犻櫎"}, status = 400, safe=False)
         try:
@@ -2618,9 +3055,9 @@ def setPlasmidCulture(request):
         Marker_list = data["marker"]
         if(plasmidName == None or plasmidName == ""):
             raise WebDatabaseValidationException(parameter = "name")
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     # plasmidid = Plasmidneed.objects.filter(name=plasmidName).first()
@@ -2638,11 +3075,11 @@ def setPlasmidCulture(request):
                     plasmidid.save()
                     return JsonResponse(data = {"success":True,"data":"success upload"},status=200, safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -2787,7 +3224,7 @@ def BackboneDataALL(request):
                 # return JsonResponse(data={'success':False, 'error':"No such backbone"}, status=404,safe=False)
                 # return JsonResponse({'code':204,'status': 'failed', 'data': []})
         else:
-            page_size = bounded_page_size(request.GET.get('page_size'))
+            page_size = int(request.GET.get('page_size',10))
             offset = (page -1)*page_size
             total_count = Backbonetable.objects.count()
             total_pages = (total_count + page_size -1) // page_size
@@ -2837,7 +3274,7 @@ def BackboneFilter(request):
         Scar = data['Scar']
         Name = data['name']
         page = data['page']
-        page_size = bounded_page_size(data.get('page_size'))
+        page_size = data['page_size']
         offset = (page -1)*page_size
         scarBackboneid = []
         if(Enzyme == "BsmBI"):
@@ -3566,9 +4003,9 @@ def setBackboneCulture(request):
             BackboneName = data["name"]
         Ori_list = data["ori"]
         Marker_list = data["marker"]
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     if("name" in data):
@@ -3587,11 +4024,11 @@ def setBackboneCulture(request):
                     backbone_obj.save()
                     return JsonResponse(data = {"success":True,"data":"success upload"},status=200, safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         return JsonResponse(data={'success':False,'error':'time out'},status = 400, safe = False)
@@ -3692,26 +4129,24 @@ def GetBackboneFeature(request, BackboneID):
 
 
 def _get_feature_payload(data):
-    payload = {
-        'feature_start': data.get('feature_start', data.get('start_position')),
-        'feature_end': data.get('feature_end', data.get('end_position')),
-        'feature_type': data.get('feature_type'),
-        'feature_label': data.get('feature_label', data.get('label')),
-        'feature_color': data.get('feature_color', data.get('color')),
-        'feature_apeinfo': data.get('feature_apeinfo', data.get('ape_info')),
+    return {
+        "feature_start": data.get("feature_start", data.get("start_position")),
+        "feature_end": data.get("feature_end", data.get("end_position")),
+        "feature_type": sanitize_feature_text(data.get("feature_type")),
+        "feature_label": sanitize_feature_text(data.get("feature_label", data.get("label"))),
+        "feature_color": data.get("feature_color", data.get("color")),
+        "feature_apeinfo": data.get("feature_apeinfo", data.get("ape_info")),
+        "strand": data.get("strand"),
+        "feature_group": data.get("feature_group"),
+        "segment_order": data.get("segment_order", 0),
+        "location_operator": data.get("location_operator", ""),
+        "coordinate_system": "one_based_closed",
+        "feature_metadata": data.get("feature_metadata", {}),
     }
-    for key in ('strand', 'feature_group', 'segment_order', 'location_operator',
-                'coordinate_system', 'feature_metadata'):
-        if key in data:
-            payload[key] = data[key]
-    return payload
 
 
 def _validate_feature_payload(payload, partial=False):
-    required_fields = ["feature_start", "feature_end", "feature_type"]
-    if not partial:
-        for field in ("feature_label", "feature_color", "feature_apeinfo"):
-            payload[field] = payload.get(field) or ""
+    required_fields = ["feature_start", "feature_end", "feature_type", "feature_label", "feature_color", "feature_apeinfo"]
     if payload["feature_color"] in [None, ""]:
         payload["feature_color"] = payload["feature_apeinfo"]
     if partial:
@@ -3721,6 +4156,14 @@ def _validate_feature_payload(payload, partial=False):
     missing_fields = [field for field in required_fields if not partial and payload.get(field) in [None, ""]]
     if missing_fields:
         return False, f"Missing required fields: {', '.join(missing_fields)}", payload
+    if payload.get('strand') not in (-1, 0, 1, None):
+        return False, 'Invalid strand', payload
+    if not partial:
+        import uuid
+        payload['feature_group'] = payload.get('feature_group') or str(uuid.uuid4())
+    for key in ('feature_start', 'feature_end'):
+        if key in payload and (type(payload[key]) is not int or payload[key] < 1):
+            return False, 'Coordinates must be positive closed-interval integers', payload
     return True, "", payload
 
 
@@ -3742,7 +4185,7 @@ def _add_feature(request, parent_model, feature_model, parent_lookup, parent_id_
         
         parent_obj = parent_model.objects.get(**{parent_lookup: parent_name})
         feature_obj = feature_model.objects.create(**{parent_obj_field: parent_obj}, **payload)
-        return JsonResponse(data={"success": True, "data": list(feature_model.objects.filter(pk=feature_obj.pk).values())[0]}, status=200, safe=False)
+        return JsonResponse(data={"success": True, "data": list(feature_model.objects.filter(pfid=feature_obj.pfid).values())[0]}, status=200, safe=False)
     except parent_model.DoesNotExist:
         raise WebDatabaseNotFoundException()
         # return JsonResponse(data={"success": False, "message": f"No such {parent_id_field}"}, status=404, safe=False)
@@ -3765,33 +4208,27 @@ def _get_feature(request, feature_model, parent_obj_field, parent_id):
 
 
 def _update_feature(request, feature_model):
-    if request.method != "POST":
+    if request.method != 'POST':
         raise WebDatabasePOSTMethodException()
-        # return JsonResponse(data={"success": False, "message": "Just POST Method"}, status=405, safe=False)
-
-    try:
-        data = json.loads(request.body)
-        pfid = data.get("pfid")
-        if pfid in [None, ""]:
-            raise WebDatabaseValidationException(parameter="pfid")
-            # return JsonResponse(data={"success": False, "message": "pfid cannot be empty"}, status=400, safe=False)
-        payload = _get_feature_payload(data)
-        valid, message, payload = _validate_feature_payload(payload, partial=True)
-        if not valid:
-            raise WebDatabasePermissionException()
-            # return JsonResponse(data={"success": False, "message": message}, status=400, safe=False)
-
-        with transaction.atomic():
-            feature_obj = feature_model.objects.select_for_update().get(pfid=pfid)
-            for field, value in payload.items():
-                setattr(feature_obj, field, value)
-            feature_obj.save()
-        return JsonResponse(data={"success": True, "data": list(feature_model.objects.filter(pfid=pfid).values())[0]}, status=200, safe=False)
-    except feature_model.DoesNotExist:
-        return WebDatabaseNotFoundException()
-        # return JsonResponse(data={"success": False, "message": "Feature does not exist"}, status=404, safe=False)
-    except Exception as e:
-        raise e
+    data = json.loads(request.body)
+    with transaction.atomic():
+        current = feature_model.objects.select_for_update().get(pk=data.get('pfid', data.get('bfif')))
+        group = feature_model.objects.filter(feature_group=current.feature_group) if current.feature_group else feature_model.objects.filter(pk=current.pk)
+        if group.count() > 1 and any(key in data for key in ('start_position', 'end_position', 'feature_start', 'feature_end')):
+            return JsonResponse({'success': False, 'message': 'Use ReplaceFeatures with all segments to replace a compound location'}, status=400)
+        aliases = {'start_position': 'feature_start', 'end_position': 'feature_end', 'label': 'feature_label',
+                   'color': 'feature_color', 'ape_info': 'feature_apeinfo'}
+        allowed = {'feature_start', 'feature_end', 'feature_type', 'feature_label', 'feature_color', 'feature_apeinfo', 'strand'}
+        updates = {aliases.get(k, k): v for k, v in data.items() if aliases.get(k, k) in allowed}
+        if 'strand' in updates and updates['strand'] not in (-1, 0, 1, None):
+            return JsonResponse({'success': False, 'message': 'Invalid strand'}, status=400)
+        for row in group:
+            for key, value in updates.items():
+                setattr(row, key, value)
+            if not 1 <= row.feature_start <= row.feature_end:
+                raise ValueError('Invalid closed interval')
+            row.save()
+    return JsonResponse({'success': True, 'feature_group': current.feature_group})
         # return JsonResponse(data={"success": False, "message": str(e.args)}, status=400, safe=False)
 
 
@@ -3805,7 +4242,10 @@ def _delete_feature(request, feature_model, parent_model, parent_lookup, parent_
         parent_id = request.GET.get("id")
         parent_name = request.GET.get("name")
         if pfid:
-            deleted_count, _ = feature_model.objects.filter(pfid=pfid).delete()
+            item = feature_model.objects.get(pk=pfid)
+            query = feature_model.objects.filter(**{parent_obj_field: getattr(item, parent_obj_field)})
+            query = query.filter(feature_group=item.feature_group) if item.feature_group else query.filter(pk=item.pk)
+            deleted_count, _ = query.delete()
         elif parent_id:
             deleted_count, _ = feature_model.objects.filter(**{parent_obj_field: parent_id}).delete()
         elif parent_name:
@@ -4019,9 +4459,9 @@ def GetDBDMenu(request):
     if(request.method == "GET"):
         DBDList = Dbdtable.objects.all()
         DBDMenu = []
-        if(len(DBDMenu) > 0):
-            for obj in DBDMenu:
-                DBDMenu.append({"name":"obj.name","i0":obj.i0,"kd":obj.kd})
+        if(len(DBDList) > 0):
+            for obj in DBDList:
+                DBDMenu.append({"name":obj.name,"i0":obj.i0,"kd":obj.kd})
                 # DBDMenu[obj.name] = [obj.i0,obj.kd]
             return JsonResponse(data=DBDMenu, status=200,safe=False)
             # return JsonResponse({'code':200,'status':'success','data':DBDMenu})
@@ -4051,6 +4491,25 @@ def GetDBDKd(request):
             return JsonResponse(data="No such DBD", status=404,safe=False)
             # return JsonResponse({'code':204,'status':'failed','data':'No DB Data Found'})
 
+
+def GetDBDKdI0(request,name):
+    if(request.method == "GET"):
+        print(name)
+        if(name == None or name == ""):
+            return JsonResponse(data="Name cannot be empty", status=400,safe=False)
+            # return JsonResponse({'code':204,'status':'failed','data':'name can not be empty'})
+        DBDKd = Dbdtable.objects.filter(name=name).first().kd
+        DBDI0 = Dbdtable.objects.filter(name=name).first().i0
+        if(DBDKd != None):
+            print("9999999")
+            return JsonResponse(data={'Kd':DBDKd,'I0':DBDI0}, status=200)
+            # return JsonResponse({'code':200,'status':'success','data':DBDKd})
+        else:
+            return JsonResponse(data="No such DBD", status=404,safe=False)
+                # return JsonResponse({'code':204,'status':'failed','data':'No DB Data Found'})
+    
+
+
 def AddDBD(request):
     """
     AddDBD API view.
@@ -4068,6 +4527,11 @@ def AddDBD(request):
         if(Name == None or I0 == None or kd == None or Name == "" or I0 == 0 or kd == 0):
             return JsonResponse(data="Name,I0,Kd cannot be empty", status=400,safe=False)
         else:
+            dbd_objects = Dbdtable.objects.filter(name=Name)
+            if dbd_objects.exists():
+                dbd_objects.update(i0=I0, kd=kd)
+                return JsonResponse(data="Updated DBD", status=200, safe=False)
+
             Dbdtable.objects.create(name=Name, i0=I0, kd=kd)
             return JsonResponse(data="Added DBD", status=200,safe=False)
 
@@ -4216,7 +4680,12 @@ def AddLBDDimer(request):
                 or k2 == 0 or k3 == None or k3 == 0 or I == None or I == 0):
             return JsonResponse(data="Name,k1,k2,k3,I cannot be empty", status=400,safe=False)
         else:
-            Lbddimertable.objects.create(name=Name, k1=k1, k2=k2, k3=k3, I=I)
+            lbd_objects = Lbddimertable.objects.filter(name=Name)
+            if lbd_objects.exists():
+                lbd_objects.update(k1=k1, k2=k2, k3=k3, i=I)
+                return JsonResponse(data="Updated LBD Dimer", status=200, safe=False)
+
+            Lbddimertable.objects.create(name=Name, k1=k1, k2=k2, k3=k3, i=I)
             return JsonResponse(data="Added LBDDimer", status=200,safe=False)
 
 def UpdateLbdDimer(request):
@@ -4246,7 +4715,21 @@ def UpdateLbdDimer(request):
             else:
                 return JsonResponse(data="No such LBD Dimer", status=404, safe=False)
 
-
+def GetLBDDimerValue(request,name):
+    """
+        Get LBD Dimer Value, Just K1,K2,K3,I
+    """
+    
+    if(request.method == "GET"):
+        if name == None or name == "":
+            return JsonResponse(data = {"success":False,"message":"parameter name is empty"},status=400, safe=False)
+        lbd_obj = Lbddimertable.objects.filter(name=name)
+        if(lbd_obj != None):
+            return JsonResponse(data={"success":True,"k1":lbd_obj.first().k1,"k2":lbd_obj.first().k2,"k3":lbd_obj.first().k3,"I":lbd_obj.first().i},status=200, safe=False)
+        else:
+            return JsonResponse(data = {"success":False,"message":"No Such LBD Dimer"},status=404, safe=False)
+    else:
+        return JsonResponse(data = {"success":False,"message":"Just GET Method"},status=500, safe=False)
 
 #===================================================================================================
 #LBD NR
@@ -4370,6 +4853,11 @@ def AddLbdnr(request):
         or k3 == 0 or kx1 == None or kx1 == 0 or kx2 == None or kx2 == 0):
             return JsonResponse(data="Name,k1,k2,k3,kx1,kx2 cannot be empty", status=400,safe=False)
         else:
+            lbd_objects = Lbdnrtable.objects.filter(name=Name)
+            if lbd_objects.exists():
+                lbd_objects.update(k1=k1, k2=k2, k3=k3, kx1=kx1, kx2=kx2)
+                return JsonResponse(data="Updated LBD NR", status=200, safe=False)
+
             Lbdnrtable.objects.create(name=Name,k1=k1,k2=k2,k3=k3,kx1=kx1,kx2=kx2)
             return JsonResponse(data="Added LBD NR", status=200,safe=False)
 
@@ -4452,7 +4940,7 @@ def GetPartAliasByID(request):
             if(Name != None):
                 return JsonResponse(data = {"PartAlias":Name.alias},status=200,safe=False)
             else:
-                raise WebDatabaseNotFoundException()
+                return JsonResponse(data = {"PartAlias":""},status=200,safe=False)
                 # return JsonResponse(data = "No such part",status=404, safe=False)
         else:
             raise WebDatabaseValidationException(parameter="ID")
@@ -4543,7 +5031,7 @@ def GetBackboneAliasByID(request):
             if(Name != None):
                 return JsonResponse(data={"BackboneAlias":Name.alias},status=200,safe=False)
             else:
-                raise WebDatabaseNotFoundException()
+                return JsonResponse(data={"BackboneAlias":""},status=200,safe=False)
                 # return JsonResponse(data = "No such Backbone",status=404, safe=False)
         else:
             raise WebDatabaseValidationException(parameter="ID")
@@ -4607,7 +5095,7 @@ def GetPlasmidAliasByID(request):
             if(Name != None):
                 return JsonResponse(data = {"PlasmidAlias":Name.alias},status=200,safe=False)
             else:
-                raise WebDatabaseNotFoundException()
+                return JsonResponse(data = {"PlasmidAlias":""},status=200,safe=False)
                 # return JsonResponse(data = "No such Plasmid",status=400, safe=False)
         else:
             raise WebDatabaseValidationException(parameter="ID")
@@ -4634,19 +5122,19 @@ def AddPlasmidParentInfo(request):
         if(plasmidID == "" or plasmidID == 0):
             raise WebDatabaseValidationException(parameter = "plasmidID")
             # return JsonResponse(data = {"success":False,"data":"Parameter is empty"},status = 400, safe=False)
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     Plasmidneed.objects.filter(plasmidid = plasmidID).update(customparentinformation = ParentInfo)
                     return JsonResponse(data = {"success":True,"data":"success upload"},status=200, safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -4678,9 +5166,9 @@ def AddParentPart(request):
             
             # return JsonResponse(data="PlasmidName or PartName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.get(plasmidid = sonPlasmidid)
@@ -4692,14 +5180,14 @@ def AddParentPart(request):
                         Parentparttable.objects.create(sonplasmidid=sonPlasmidObj,parentpartid = parentPartObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except Parttable.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -4724,9 +5212,9 @@ def AddParentPartByID(request):
             raise WebDatabaseValidationException(parameter="ParentPartID")
             # return JsonResponse(data="PlasmidName or PartName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.get(name = sonPlasmidName)
@@ -4738,14 +5226,14 @@ def AddParentPartByID(request):
                         Parentparttable.objects.create(sonplasmidid=sonPlasmidObj,parentpartid = parentPartObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except Parttable.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -4772,9 +5260,9 @@ def AddParentBackbone(request):
             raise WebDatabaseValidationException()
             # return JsonResponse(data="PlasmidName or BackboneName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.get(plasmidid = sonPlasmidid)
@@ -4787,14 +5275,14 @@ def AddParentBackbone(request):
                         Parentbackbonetable.objects.create(sonplasmidid=sonPlasmidObj,parentbackboneid = parentBackboneObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except Backbonetable.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -4821,9 +5309,9 @@ def AddBackboneParentByID(request):
             raise WebDatabaseValidationException(parameter="ParentBackboneID")
             # return JsonResponse(data="PlasmidName or BackboneName cannot be empty", status=400,safe=False)
             # return JsonResponse({'code':204,'status': 'failed', 'data': 'Plasmid Name can not be empty'})
-        start_time = time.monotonic()
-        max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-        while time.monotonic() - start_time < max_wait_time:
+        start_time = time.time()
+        max_wait_time = 5
+        while time.time() - start_time < max_wait_time:
             try:
                 with transaction.atomic():
                     sonPlasmidObj = Plasmidneed.objects.get(name = sonPlasmidName)
@@ -4835,14 +5323,14 @@ def AddBackboneParentByID(request):
                         Parentbackbonetable.objects.create(sonplasmidid=sonPlasmidObj,parentbackboneid = parentBackboneObj)
                     return JsonResponse(data={"success":True},status=200,safe=False)
             except Plasmidneed.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except Backbonetable.DoesNotExist:
-                time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                time.sleep(0.5)
                 continue
             except OperationalError as e:
                 if 'lock' in str(e).lower():
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 raise e
         raise WebDatabaseTimeoutException()
@@ -5006,9 +5494,9 @@ def setPartScar(request):
         aari = data['aari']
         sapi = data['sapi']
         if(name != None and name != ""):
-            start_time = time.monotonic()
-            max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-            while time.monotonic() - start_time < max_wait_time:
+            start_time = time.time()
+            max_wait_time = 5
+            while time.time() - start_time < max_wait_time:
                 try:
                     with transaction.atomic():
                         # part_obj = Parttable.objects.filter(name = name).first()
@@ -5032,11 +5520,11 @@ def setPartScar(request):
                             # Partscartable.objects.create(partid = part_obj, bsmbi = bsmbi, bsai = bsai, bbsi = bbsi,aari = aari, sapi = sapi)
                             return JsonResponse(data = {'success':True}, status = 200, safe = False)
                 except Parttable.DoesNotExist:
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 except OperationalError as e:
                     if 'lock' in str(e).lower():
-                        time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                        time.sleep(0.5)
                         continue
                     raise e
             raise WebDatabaseTimeoutException()
@@ -5102,9 +5590,9 @@ def setBackboneScar(request):
         aari = data['aari']
         sapi = data['sapi']
         if(("name" in data and name != None and name != "") or ("backboneid" in data and id != None and id != "")):
-            start_time = time.monotonic()
-            max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-            while time.monotonic() - start_time < max_wait_time:
+            start_time = time.time()
+            max_wait_time = 5
+            while time.time() - start_time < max_wait_time:
                 try:
                     with transaction.atomic():
                         # backbone_obj = Backbonetable.objects.filter(name = name).first()
@@ -5124,11 +5612,11 @@ def setBackboneScar(request):
                             # Backbonescartable.objects.filter(backboneid = backbone_obj).update(bsmbi = bsmbi, bsai = bsai, bbsi = bbsi,aari = aari, sapi = sapi)
                         return JsonResponse(data = {'success':True}, status = 200, safe = False)
                 except Backbonetable.DoesNotExist:
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 except OperationalError as e:
                     if 'lock' in str(e).lower():
-                        time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                        time.sleep(0.5)
                         continue
                     raise e
             raise WebDatabaseTimeoutException()
@@ -5188,9 +5676,9 @@ def setPlasmidScar(request):
         aari = data['aari']
         sapi = data['sapi']
         if(("name" in data and name != None and name != "") or ("plasmidid" in data and id != None and id != "")):
-            start_time = time.monotonic()
-            max_wait_time = settings.DB_RETRY_TIMEOUT_SECONDS
-            while time.monotonic() - start_time < max_wait_time:
+            start_time = time.time()
+            max_wait_time = 5
+            while time.time() - start_time < max_wait_time:
                 try:
                     with transaction.atomic():
                         # plasmid_obj = Plasmidneed.objects.filter(name = name).first()
@@ -5212,11 +5700,11 @@ def setPlasmidScar(request):
                         plasmid_obj.save()
                     return JsonResponse(data = {'success':True}, status = 200, safe = False)
                 except Plasmidneed.DoesNotExist:
-                    time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                    time.sleep(0.5)
                     continue
                 except OperationalError as e:
                     if 'lock' in str(e).lower():
-                        time.sleep(settings.DB_RETRY_INTERVAL_SECONDS)
+                        time.sleep(0.5)
                         continue
                     raise e
             raise WebDatabaseTimeoutException()
@@ -5358,8 +5846,10 @@ def UpdatePartSequence(request):
     """
     if(request.method == "POST"):
         data = json.loads(request.body)
-        name = data['name']
-        sequence = data['Level0Sequence']
+        name, name_warning = _validate_uploaded_part_name(
+            data.get('name'), data.get('Level0Sequence', '')
+        )
+        sequence = _normalize_part_sequence(data['Level0Sequence'])
         # NewLength = len(request.POST.get('Level0Sequence'))
         # NewLevel0Sequence = request.POST.get('Level0Sequence')
         with transaction.atomic():
@@ -5370,7 +5860,11 @@ def UpdatePartSequence(request):
                 part_obj.level0sequence = sequence
                 part_obj.updatedate = timezone.localtime(timezone.now())
                 part_obj.save()
-                return JsonResponse(data = {'success': True}, status = 200, safe = False)
+                response_data = {'success': True}
+                if name_warning:
+                    response_data['warning'] = name_warning
+                    response_data['message'] = name_warning
+                return JsonResponse(data=response_data, status=200, safe=False)
             except Parttable.DoesNotExist:
                 raise WebDatabaseNotFoundException()
                 # return JsonResponse(data = {'success':False, 'message':"Part Does Not Exist"}, status = 404, safe = False)
@@ -5380,6 +5874,48 @@ def UpdatePartSequence(request):
     else:
         raise WebDatabasePOSTMethodException()
         # return JsonResponse(data = {'success':False, 'message' : "just POST method"}, status = 500, safe = False)
+
+
+def UpsertPartSequence(request):
+    """Create or update a Part sequence after exactly one GPCS validation."""
+    if request.method != "POST":
+        raise WebDatabasePOSTMethodException()
+
+    data = json.loads(request.body)
+    sequence = _normalize_part_sequence(data.get("Level0Sequence", ""))
+    task_id = str(data.get("task_id") or "").strip() or None
+    name, name_warning = _validate_uploaded_part_name(
+        data.get("name"), sequence, task_id=task_id
+    )
+    username = request.session["info"]["uname"]
+    now = timezone.localtime(timezone.now())
+
+    with transaction.atomic():
+        part_obj = (
+            Parttable.objects.select_for_update()
+            .filter(name__iexact=name)
+            .first()
+        )
+        created = part_obj is None
+        if created:
+            part_obj = Parttable(
+                name=name,
+                alias="",
+                type=1,
+                user=username,
+                uploaddate=now,
+            )
+        part_obj.lengthinlevel0 = len(sequence)
+        part_obj.level0sequence = sequence
+        part_obj.user = username
+        part_obj.updatedate = now
+        part_obj.save()
+
+    response_data = {"success": True, "created": created}
+    if name_warning:
+        response_data["warning"] = name_warning
+        response_data["message"] = name_warning
+    return JsonResponse(response_data, status=200)
 
 def UpdateBackboneSequence(request):
     """
@@ -5583,7 +6119,7 @@ def create_repository(request):
         if(Name != None and Name != ""):
             try:
                 repository_id = str(uuid.uuid1())
-                ttl_hours = settings.REPOSITORY_CREATE_TTL_HOURS
+                ttl_hours = 24*30
                 
                 expires_at = timezone.localtime(timezone.now())+timezone.timedelta(hours = ttl_hours)
                 user = request.user
@@ -5695,7 +6231,7 @@ def add_part_to_repository(request):
         except Temporaryrepository.DoesNotExist:
             # 鍒涘缓鏂扮殑涓存椂浠撳簱,璇㈤棶鍚嶇О
             repository_id = uuid.uuid4()
-            ttl_hours = settings.REPOSITORY_UPDATE_TTL_HOURS
+            ttl_hours = 24
             expires_at = timezone.localtime(timezone.now()) + timezone.timedelta(hours=ttl_hours)
             user = CustomUser.objects.filter(uid=user_id).first()
             
@@ -5812,7 +6348,7 @@ def add_backbone_to_repository(request):
         except Temporaryrepository.DoesNotExist:
             # 鍒涘缓鏂扮殑涓存椂浠撳簱,璇㈤棶鍚嶇О
             repository_id = uuid.uuid4()
-            ttl_hours = settings.REPOSITORY_UPDATE_TTL_HOURS
+            ttl_hours = 24
             expires_at = timezone.localtime(timezone.now()) + timezone.timedelta(hours=ttl_hours)
             user = CustomUser.objects.filter(uid=user_id).first()
             
@@ -5919,7 +6455,7 @@ def add_plasmid_to_repository(request):
         except Temporaryrepository.DoesNotExist:
             # 鍒涘缓鏂扮殑涓存椂浠撳簱,璇㈤棶鍚嶇О
             repository_id = uuid.uuid4()
-            ttl_hours = settings.REPOSITORY_UPDATE_TTL_HOURS
+            ttl_hours = 24
             expires_at = timezone.localtime(timezone.now()) + timezone.timedelta(hours=ttl_hours)
             user = CustomUser.objects.filter(uid=user_id).first()
             
@@ -6577,5 +7113,52 @@ def deleteVisitorAccessLog(request):
         return JsonResponse({"success": False, "message": str(exc)}, status=400, safe=False)
     
 
+def get_api_doc(request,project):
+    import markdown
+    from django.shortcuts import render
+    if request.method != "GET":
+        raise WebDatabaseGETMethodException()
+    if(project.lower() == "webdatabase"):
+        file_path = rf'{getattr(settings,"WEBDATABASE_API")}'
+        import os
+        if not os.path.exists(file_path):
+            raise WebDatabaseException("API 文件不存在")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    elif(project.lower() == "labdatabase"):
+        file_path = rf'{getattr(settings,"LABDATABASE_API")}'
+        import os
+        if not os.path.exists(file_path):
+            raise WebDatabaseException("API 文件不存在")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    else:
+        raise WebDatabaseException("没有project信息")
+    html_content = markdown.markdown(content,extensions=['extra'])
+    return render(request, 'doc_html.html',{'content':html_content})
 
 
+@transaction.atomic
+def ReplaceFeatures(request, feature_kind, name):
+    if request.method != 'POST':
+        raise WebDatabasePOSTMethodException()
+    from LabDatabase.assembly_versions import source_models
+    from LabDatabase.feature_records import record_from_rows, normalized_record, feature_rows
+    kind = feature_kind.lower()
+    if kind not in ('part', 'backbone', 'plasmid'):
+        return JsonResponse({'success': False, 'message': 'Unknown feature kind'}, status=400)
+    parent_model, feature_model, parent_key, seq_field = source_models(kind)
+    parent = parent_model.objects.select_for_update().get(name=name)
+    data = json.loads(request.body)
+    rows = data.get('features')
+    if not isinstance(rows, list):
+        return JsonResponse({'success': False, 'message': 'features must be a list'}, status=400)
+    record = normalized_record(record_from_rows(getattr(parent, seq_field), rows, name=name))
+    feature_model.objects.filter(**{parent_key: parent}).delete()
+    feature_model.objects.bulk_create([feature_model(**{parent_key: parent}, **row) for row in feature_rows(record)])
+    if kind == 'plasmid':
+        # An explicit map upload is a new authoritative annotation version.
+        from LabDatabase.assembly_versions import save_version
+        import uuid
+        save_version(parent.pk, 'upload-' + str(uuid.uuid4()), record, [], 'upload')
+    return JsonResponse({'success': True, 'feature_count': len(record.features)})

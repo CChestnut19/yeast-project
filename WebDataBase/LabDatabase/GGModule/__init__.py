@@ -1,1 +1,2 @@
-"""Golden Gate assembly package."""
+import sys
+sys.path.append('../..')

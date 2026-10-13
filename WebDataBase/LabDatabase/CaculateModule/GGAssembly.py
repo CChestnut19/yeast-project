@@ -1,18 +1,17 @@
-from WebDataWorld.runtime import ServiceSession
 import json
 import logging
 import requests
 from django.forms import ValidationError
 import os
 from Bio.Seq import Seq
-from LabDatabase.GGModule import SupportGG
+from GGModule import SupportGG
 from .FeatureIdentify import featureIdentify
 from .FileGenerator import SequenceAnnotator
 from .ScarIdentify import scarPosition, scarFunction
 from Bio.SeqIO import parse
-from LabDatabase.ControllerModule import FittingLabels
+from ControllerModule import FittingLabels
 from urllib.parse import urlencode
-from LabDatabase.LabDatabaseException import LabDatabaseException
+from LabDatabaseException import LabDatabaseException
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def createSession(django_request):
-    session = ServiceSession()
+    session = requests.Session()
     # token = django_request.COOKIES.get('csrftoken')
             # session.headers.update({
             #     'User-Agent':'Django-App/1.0',
@@ -105,7 +104,7 @@ class GGFileProcessor:
                 # 清理数据
                 df = cls.clean_dataframe(df)
             
-            # session = ServiceSession()
+            # session = requests.Session()
             # token = django_request.COOKIES.get('csrftoken')
             # session.headers.update({
             #     'User-Agent':'Django-App/1.0',
@@ -239,7 +238,7 @@ class GGFileProcessor:
             
 def AssemblyResultUpload(django_request,Name, Sequence, partList, BackboneList, PlasmidList, Base_URL):
     try:
-        session = ServiceSession()
+        session = requests.Session()
         token = django_request.COOKIES.get('csrftoken')
         session.headers.update({
             'User-Agent':'Django-App/1.0',

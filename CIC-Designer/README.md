@@ -58,8 +58,8 @@ template_file=C:/path/to/TFPlot/File/UPLOAD_FOLDER/Template.csv
 Level2_Backbone_Name=Level2载体名称
 Level3_Backbone_Name=Level3载体名称
 
-# WebDatabase API 根地址；建议保留末尾斜杠
-WebDatabase_URL=http://数据库服务地址:端口/WebDatabase/
+# Django 服务根地址，不包含 /WebDatabase 或 /LabDatabase
+WebDatabase_URL=http://数据库服务地址:端口
 
 # WebDatabase 登录凭据，不要提交到 Git
 username=你的用户名
@@ -195,3 +195,26 @@ python -m pip install python-dotenv
 | `Entity/` | Part、LBD、DBD、Backbone 等领域模型 |
 | `templates/` | Flask HTML 模板 |
 | `File/` | 上传模板、示例数据和历史输出文件 |
+
+
+## CIC-Designer 组装 API 对接
+
+组装客户端使用 Django 登录会话与 CSRF，不再使用 bio-app Token。启动前在本目录的 `.env` 配置 `WebDatabase_URL`、`username`、`password` 和两个 Backbone 名称；也支持 `WEBDATABASE_USERNAME` / `WEBDATABASE_PASSWORD`。每个组装请求使用独立会话，登录后再读取元件。
+
+- 提交：`POST /LabDatabase/AssemblyWithoutRepo`，JSON 字段为 `uuid`、`part`（ID）、`backbone`（名称）、`plasmid`（名称）、`scar`。
+- 轮询：`GET /LabDatabase/task_status/{task_id}`，读取顶层 `status` 和 `result`。
+- 第一阶段：读取 `result.plasmid_id`，通过 `/WebDatabase/PlasmidNameByID?ID=...` 获取真实入库名称，再提交第二阶段。
+- 第二阶段：通过同一登录会话下载 `result.download_url`；Flask `/Assembly` 返回文件附件，与页面下载逻辑对应。默认临时文件在读取后删除；设置 `result_file` 则保留指定文件（并发使用应保持默认）。
+
+提交请求不会自动重试，避免创建重复任务。当前 WebDatabase 的无仓库接口不读取客户端 `level`，数据库中的结果等级仍由服务端推断；客户端的 Level2/Level3 是流程阶段名称。未更改服务端的组装或等级规则。
+
+
+## 优化评分与 yeast 对齐
+
+`Services/opt.py` 直接实现稳定 CIC 质量守恒与响应公式，不导入 yeast。默认优化目标为 `log10(on/off) + log10(on-off)`，固定等权；页面不再提供 alpha/beta 控件。
+
+DBD 的名称、`I0` 和 `kd` 从同一次 `GetDBDMenu` 返回中配对读取。无诱导响应使用诱导剂浓度 0。排除非有限值及不满足 `on > off > 0` 的候选；没有有效候选时返回错误，不选择最后一条记录。
+
+默认仍搜索 L=0.3～10 的 2000 个等距点，`Imax=35.84931505` 表示幅度而非总上限，诱导剂浓度采用各 LBD 参数记录中的 `i`，单位必须与该记录的参数一致。数值入口 `scan_designs` 可传入网格、幅度与可选核转运参数，以便与 yeast 使用完全相同输入进行比较；本次未增加 Pareto 或高斯过程搜索，也未修改参数拟合损失。
+
+`/Opt` 返回 `score`；`MaxFoldchange` 保留为兼容别名，二者均为综合评分而非单独诱导倍数。保留三个历史 CSV 文件名：`new_foldchange_max_values.csv`（评分）、`new_max_L_values.csv`（浓度）、`new_output.csv`（诱导输出）；无有效点的组合留空。

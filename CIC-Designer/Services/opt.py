@@ -1,169 +1,138 @@
-import numpy as np
+"""CIC design search with the same ordinary response and equal-weight score as yeast."""
 import csv
-import pandas as pd
-from Entity import DBD,LBD
-import requests
+import numpy as np
+from Entity import DBD, LBD
 
-def foldchange1(L, kd,k1,k2,k3, Imax, I0, I,alpha,beta):
-    x1 = np.sqrt((k2*I+1)*(k2*I+1)+ 8 * L * (k2*k2*k3*I*I + k1))
-    x2 = np.sqrt(1 + 8 * L * k1)
-    F1 = np.log(L / 2) + np.log((x1 - (k2*I+1)) / (x1 + (k2*I+1))) + np.log(kd)
-    F2 = np.log(L / 2) + np.log((x2 - 1) / (x2 + 1)) + np.log(kd)
-    P1 = (Imax / (1 + np.exp(-F1))) + I0
-    P2 = (Imax / (1 + np.exp(-F2))) + I0
-    f1 = P1 / P2
-    f2 = P1 - P2
-    alpha = float(alpha)
-    beta = float(beta)
-    return alpha*np.log10(f1)+ beta*np.log10(f2)
 
-def foldchange2(L, kd,k1,k2,k3, Imax, I0, I):
+DEFAULT_IMAX = 35.84931505  # Amplitude, not the total response ceiling.
 
-    x1 = np.sqrt((k2*I+1)*(k2*I+1)+ 8 * L * (k2*k2*k3*I*I + k1))
-    x2 = np.sqrt(1 + 8 * L * k1)
-    F1 = np.log(L / 2) + np.log((x1 - (k2*I+1)) / (x1 + (k2*I+1))) + np.log(kd)
-    F2 = np.log(L / 2) + np.log((x2 - 1) / (x2 + 1)) + np.log(kd)
-    P1 = (Imax / (1 + np.exp(-F1))) + I0
-    P2 = (Imax / (1 + np.exp(-F2))) + I0
-    f1 = P1 / P2
-    f2 = P1 - P2
-    
-    return P1
 
-def ReadExcelKdValue(api_url,session):
-    Menu = DBD.GetDBDKdList(api_url,session)
-    return Menu
+def response(L, kd, k1, k2, k3, Imax, I0, I, kx1=0.0, kx2=0.0):
+    """Stable mass balance, implemented locally; no dependency on yeast."""
+    L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2 = (
+        np.asarray(value, dtype=float)
+        for value in (L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2))
+    if any(not np.isfinite(value).all() or np.any(value < 0)
+           for value in (L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2)):
+        raise ValueError('Response parameters must be finite and non-negative')
+    b = 1.0 + kx1 + k2 * I * (1.0 + kx2)
+    d = k1 * (1.0 + kx1**2) + k2**2 * k3 * I**2 * (1.0 + kx2**2)
+    if not np.isfinite(b).all() or not np.isfinite(d).all():
+        raise ValueError('Mass-balance coefficients must be finite')
+    root = np.sqrt(b**2 + 8.0 * d * L)
+    active_pool = d * np.square(2.0 * L / (b + root))
+    z = kd * active_pool
+    return I0 + Imax * z / (1.0 + z)
 
-def ReadExcelKdLabel(api_url,session):
-    # file_path = r'WebPlot\TFDatabase.xlsx'
-    # df = pd.read_excel(file_path,sheet_name="DBD")
-    # Menu = []
-    # length = len(df['name'])
-    # for i in range(0,length):
-    #     Menu.append(df.iloc[i,0])
-    Menu = DBD.GetDBDNameList(api_url,session)
-    return Menu
 
-def ReadExcelLBDValue(api_url,session):
-    # file_path = r'WebPlot\TFDatabase.xlsx'
-    # df = pd.read_excel(file_path,sheet_name="LBDDimer")
-    df = LBD.GetLBDDimerMenu(api_url,session)
-    Menu = []
-    NameList = list(df.keys())
-    length = len(NameList)
-    for i in range(0,length):
-        # {'LBD_name': 'acVHH', 'k1':0.01047924, 'k2':58.86021805, 'k3': 0.746785045,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 1},
-        temp = {}
-        temp['LBD_name'] = NameList[i]
-        temp['k1'] = df[NameList[i]][0]
-        temp['k2'] = df[NameList[i]][1]
-        temp['k3'] = df[NameList[i]][2]
-        temp['Imax'] = 35.84931505
-        temp['I0'] = 0.035485714
-        temp['I'] = df[NameList[i]][3]
-        Menu.append(temp)
-    return Menu
+def _scores(on, off):
+    on, off = np.broadcast_arrays(on, off)
+    score = np.full(on.shape, np.nan)
+    valid = (on > off) & (off > 0) & np.isfinite(on) & np.isfinite(off)
+    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+        score[valid] = np.log10(on[valid] / off[valid]) + np.log10(on[valid] - off[valid])
+    score[~np.isfinite(score)] = np.nan
+    return score
+
+
+def foldchange1(L, kd, k1, k2, k3, Imax, I0, I):
+    """Equal-weight log10 ratio + log10 difference; invalid candidates are NaN."""
+    on = response(L, kd, k1, k2, k3, Imax, I0, I)
+    off = response(L, kd, k1, k2, k3, Imax, I0, 0.0)
+    return _scores(on, off)
+
+
+def foldchange2(L, kd, k1, k2, k3, Imax, I0, I):
+    return response(L, kd, k1, k2, k3, Imax, I0, I)
+
+
+def scan_designs(concentrations, receptors, dbds):
+    """Return the first grid maximum per valid pair, as yeast's default scan does."""
+    concentrations = np.asarray(concentrations, dtype=float)
+    if (concentrations.ndim != 1 or not len(concentrations)
+            or not np.isfinite(concentrations).all() or np.any(concentrations < 0)):
+        raise ValueError('L must be a nonempty finite non-negative vector')
+    dbds = list(dbds)
+    records = []
+    for receptor in receptors:
+        for dbd in dbds:
+            args = (concentrations, dbd['kd'], receptor['k1'], receptor['k2'],
+                    receptor['k3'], receptor['Imax'], dbd['I0'])
+            nuclear = {'kx1': receptor.get('kx1', 0.0), 'kx2': receptor.get('kx2', 0.0)}
+            on = response(*args, receptor['I'], **nuclear)
+            off = response(*args, 0.0, **nuclear)
+            score = _scores(on, off)
+            indices = np.flatnonzero(np.isfinite(score))
+            if not len(indices):
+                continue
+            index = indices[np.argmax(score[indices])]
+            records.append({
+                'LBD_name': receptor['LBD_name'], 'DBD_name': dbd['DBD_name'],
+                'L': float(concentrations[index]), 'score': float(score[index]),
+                'RPU': float(on[index]),
+                'log10_fold': float(np.log10(on[index] / off[index])),
+                'log10_difference': float(np.log10(on[index] - off[index])),
+            })
+    return records
+
+
+def ReadExcelLBDValue(api_url, session):
+    menu = LBD.GetLBDDimerMenu(api_url, session)
+    if not menu:
+        raise ValueError('No LBD parameters returned by WebDatabase/GetLBDDimerMenu')
+    return [{'LBD_name': name, 'k1': values[0], 'k2': values[1], 'k3': values[2],
+             'Imax': DEFAULT_IMAX, 'I': values[3]} for name, values in menu.items()]
+
+
+def ReadExcelDBDValue(api_url, session):
+    # Name, baseline and kd must come from the same database record.
+    menu = DBD.GetDBDMenu(api_url, session)
+    if not menu:
+        raise ValueError('No DBD parameters returned by WebDatabase/GetDBDMenu')
+    return [{'DBD_name': name, 'I0': values[0], 'kd': values[1]}
+            for name, values in menu.items()]
+
 
 def normalize_optional_name(value):
     if value is None:
         return None
     value = str(value).strip()
-    if value == '' or value.lower() in ('none', 'null', 'undefined'):
-        return None
-    return value
+    return None if value.lower() in ('', 'none', 'null', 'undefined') else value
+
 
 def same_name(left, right):
     return str(left).strip().lower() == str(right).strip().lower()
 
-def HtmlReturn(alpha,beta,api_url,session,LBD=None,DBD=None):
-    fixed_lbd = normalize_optional_name(LBD)
-    fixed_dbd = normalize_optional_name(DBD)
-    L = np.linspace(0.3, 10, 2000)
-    kd_values = ReadExcelKdValue(api_url,session)
-    kd_labels = ReadExcelKdLabel(api_url,session)
-    LBD_parameters = ReadExcelLBDValue(api_url,session)
+
+def HtmlReturn(api_url, session, LBD=None, DBD=None, *, concentrations=None):
+    base = api_url.rstrip('/')
+    if base.lower().endswith('/webdatabase'):
+        base = base[:-len('/WebDatabase')]
+    receptors = ReadExcelLBDValue(base, session)
+    dbds = ReadExcelDBDValue(base, session)
+    fixed_lbd, fixed_dbd = normalize_optional_name(LBD), normalize_optional_name(DBD)
     if fixed_lbd:
-        LBD_parameters = [params for params in LBD_parameters if same_name(params['LBD_name'], fixed_lbd)]
-        if not LBD_parameters:
+        receptors = [r for r in receptors if same_name(r['LBD_name'], fixed_lbd)]
+        if not receptors:
             raise ValueError(f'LBD not found: {fixed_lbd}')
     if fixed_dbd:
-        kd_items = [(label, kd) for label, kd in zip(kd_labels, kd_values) if same_name(label, fixed_dbd)]
-        if not kd_items:
+        dbds = [d for d in dbds if same_name(d['DBD_name'], fixed_dbd)]
+        if not dbds:
             raise ValueError(f'DBD not found: {fixed_dbd}')
-        kd_labels = [item[0] for item in kd_items]
-        kd_values = [item[1] for item in kd_items]
-    # kd_values = [6.216347694,	40.97704697,	5.374494076,	0.745553315,	1.445352554,	5.066512585	,2.956590891,	0.607055765,	1.13083303,30.08697891,0.343528478,	0.102414004]
-    # kd_labels = ['CI434',         'LexAs5',       'LexAs17',      'LexA87',        'LexAs23',       'HKCI',     'RecApact', 'DeoR',           'PurR',   'CI',	   'LexAs15',       'LexAs14']
-
-
-    # kd_values = [6.216347694,	40.97704697,	5.374494076,	0.745553315,	1.445352554,	5.066512585	,2.956590891,	0.607055765,	1.13083303,30.08697891,	10.36936283,	10.53282547,0.343528478,	0.102414004]
-    # kd_labels = ['CI434', 'LexAs5', 'LexAs17', 'LexA87', 'LexAs23', 'HKCI', 'RecApact', 'DeoR', 'PurR', 'CI OL1',	'CI OR1',	 'CI Osym', 'LexAs15', 'LexAs14']
-
-    # Define different LBD parameters and names
-    # LBD_parameters = [
-    #     {'LBD_name': 'acVHH', 'k1':0.01047924, 'k2':58.86021805, 'k3': 0.746785045,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 1},
-    #     {'LBD_name': 'LasR', 'k1': 0.000170903, 'k2':0.145665169, 'k3':737.5150757,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 10},
-    #     {'LBD_name': 'RpaR', 'k1': 0.000284363, 'k2':0.00611078, 'k3':0.899893641,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 1000},
-    #     {'LBD_name': 'CinR', 'k1': 0.004921661, 'k2':71.69632721, 'k3':0.160939857,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 1},
-    #     {'LBD_name': 'BjaR', 'k1': 0.000115959, 'k2':0.005969237, 'k3':0.015982453,'Imax': 35.84931505, 'I0': 0.035485714, 'I': 1000},
-    # ]
-    max_foldchange_values = np.zeros((len(LBD_parameters), len(kd_values)))
-    max_L_values = np.zeros((len(LBD_parameters), len(kd_values)))
-    max_RPU=np.zeros((len(LBD_parameters), len(kd_values)))
-
-    MaxFoldChange = float('-inf')
-    MaxIndex1 = -1
-    MaxIndex2 = -1
-    for i, params in enumerate(LBD_parameters):
-        for j, kd in enumerate(kd_values):
-            foldchange = (foldchange1(L, kd, params['k1'], params['k2'], params['k3'],params['Imax'], params['I0'], params['I'],alpha,beta))
-            RPU=(foldchange2(L, kd, params['k1'], params['k2'], params['k3'],params['Imax'], params['I0'], params['I']))
-            max_foldchange_index = np.argmax(foldchange)
-            max_foldchange = foldchange[max_foldchange_index]
-            max_L = L[max_foldchange_index]
-            max_RPU_value = RPU[max_foldchange_index]
-            if(max_foldchange > MaxFoldChange):
-                MaxFoldChange = max_foldchange
-                MaxIndex1 = i
-                MaxIndex2 = j
-            max_foldchange_values[i][j] = max_foldchange
-            max_L_values[i][j] = max_L
-            max_RPU[i][j] = max_RPU_value
-    # 将结果输出到CSV文件
-    filename_foldchange = 'new_foldchange_max_values.csv'
-    filename_max_L = 'new_max_L_values.csv'
-    output='new_output.csv'
-
-    with open(filename_foldchange, 'w', newline='') as file:
-        writer = csv.writer(file)
-        header = ['LBD_name'] + kd_labels
-        writer.writerow(header)
-        for i, params in enumerate(LBD_parameters):
-            row = [params['LBD_name']] + (max_foldchange_values[i]).tolist()
-            writer.writerow(row)
-
-    with open(filename_max_L, 'w', newline='') as file:
-        writer = csv.writer(file)
-        header = ['LBD_name'] + kd_labels
-        writer.writerow(header)
-        for i, params in enumerate(LBD_parameters):
-            row = [params['LBD_name']] + max_L_values[i].tolist()
-            writer.writerow(row)
-
-    with open(output, 'w', newline='') as file:
-        writer = csv.writer(file)
-        header = ['LBD_name'] + kd_labels
-        writer.writerow(header)
-        for i, params in enumerate(LBD_parameters):
-            row = [params['LBD_name']] + max_RPU[i].tolist()
-            writer.writerow(row)
-    print(MaxIndex1)
-    print(MaxIndex2)
-    LBD = LBD_parameters[MaxIndex1]['LBD_name']
-    DBD = kd_labels[MaxIndex2]
-    L = max_L_values[MaxIndex1][MaxIndex2]
-    RPU = max_RPU[MaxIndex1][MaxIndex2]
-    return [MaxFoldChange,LBD,DBD,L,RPU]
-
-if __name__ == "__main__":
-    print(HtmlReturn(1,1))
+    grid = np.linspace(0.3, 10, 2000) if concentrations is None else concentrations
+    records = scan_designs(grid, receptors, dbds)
+    if not records:
+        raise ValueError('No valid candidates: require finite output with induced > basal > 0')
+    best = max(records, key=lambda record: record['score'])
+    lookup = {(r['LBD_name'], r['DBD_name']): r for r in records}
+    # Keep historical export filenames; the first contains scores, not raw fold change.
+    for filename, field in [('new_foldchange_max_values.csv', 'score'),
+                            ('new_max_L_values.csv', 'L'), ('new_output.csv', 'RPU')]:
+        with open(filename, 'w', newline='', encoding='utf-8') as output:
+            writer = csv.writer(output)
+            writer.writerow(['LBD_name'] + [d['DBD_name'] for d in dbds])
+            for receptor in receptors:
+                writer.writerow([receptor['LBD_name']] + [
+                    lookup.get((receptor['LBD_name'], d['DBD_name']), {}).get(field, '')
+                    for d in dbds])
+    return [best['score'], best['LBD_name'], best['DBD_name'], best['L'], best['RPU']]

@@ -11,7 +11,7 @@ import requests
 def GetBackbone(api_url,Name,session):
     response = session.get(f'{api_url}/WebDatabase/BackboneName?name={Name}')
     if(response.status_code == 200):
-        result = response.json()[0]
+        result = response.json()["data"]
         backbone = Backbone(result['name'],result['sequence'],result['ori'],result['marker'],
                  result['species'],result['copynumber'],result['notes'],result['scar'])
         return backbone

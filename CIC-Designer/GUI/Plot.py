@@ -16,15 +16,20 @@ import os
 
 #下游启动子输出
 def DimerModelCaculate(k1,k2,k3,I,L,Imax,kd,I0):
-    x1 = np.sqrt((k2*I+1)*(k2*I+1)+ 8 * L * (k2*k2*k3*I*I + k1))
-    P1=(Imax * ((L / 2) * (((x1 - (k2*I+1)) / (x1 + (k2*I+1))) * kd) / (1 + (L / 2) * ((x1 - (k2*I+1)) / (x1 + (k2*I+1))) * kd)) + I0)
-    return P1
+    """Stable yeast CIC response; Imax is amplitude (ceiling I0 + Imax)."""
+    k1, k2, k3, I, L, Imax, kd, I0 = (
+        np.asarray(value, dtype=float)
+        for value in (k1, k2, k3, I, L, Imax, kd, I0))
+    if any(not np.isfinite(value).all() or np.any(value < 0)
+            for value in (k1, k2, k3, I, L, Imax, kd, I0)):
+        raise ValueError("Response parameters must be finite and non-negative")
+    b = 1.0 + k2 * I
+    d = k1 + k2**2 * k3 * I**2
+    root = np.sqrt(b**2 + 8.0 * d * L)
+    active_pool = d * np.square(2.0 * L / (b + root))
+    z = kd * active_pool
+    return I0 + Imax * z / (1.0 + z)
 
-#I 是诱导剂浓度
-# def NRModelCaculate(k1,k2,k3,kx1,kx2,I,L,Imax,kd,I0):
-#     x1 = np.sqrt((k2*I+kx1+kx2*k2*I+1)*(k2*I+kx1+kx2*k2*I+1)+ 8 * L * (k2*k2*k3*I*I + k1+k1*kx1*kx1+k3*k2*k2*kx2*kx2*I*I))
-#     P1 = (Imax * ((L / 2) * ((x1 - (k2*I+kx1+kx2*k2*I+1)) / (x1 + (k2*I+kx1+kx2*k2*I+1))) * kd / (1 + (L / 2) * ((x1 - (k2*I+kx1+kx2*k2*I+1)) / (x1 + (k2*I+kx1+kx2*k2*I+1))) *kd)) + I0)
-#     return P1
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 api_url = os.environ.get("WebDatabase_URL") or os.environ.get("BIOAPP_API_URL")
@@ -68,40 +73,19 @@ def GetNameList(Type):
 
 
 def update_LBDDBDDimerData(attr,old,new):
-    print(new)
     NewParameter = LBDDimerMenu[new]
     k1 = NewParameter[0]
     k2 = NewParameter[1]
     k3 = NewParameter[2]
-    print(k1)
-    print(k2)
-    print(k3)
     DBDParameter = DBDMenu[DBDSelect.value]
     I0 = DBDParameter[0]
     kd = DBDParameter[1]
     I = np.logspace(-6,4,N)
     L = LSlider.value
     y1 = DimerModelCaculate(k1,k2,k3,I,L,Imax,kd,I0)
-    print(y1)
     source1.data = dict(Inducer = I, Output = y1)
 
 
-
-# def update_LBDDBDNRData(attr,old,new):
-#     NewParameter = LBDNRMenu[new]
-#     k1 = NewParameter[0]
-#     k2 = NewParameter[1]
-#     k3 = NewParameter[2]
-#     kx1 = NewParameter[3]
-#     kx2 = NewParameter[4]
-#     DBDParameter = DBDMenu[DBDSelect.value]
-#     I0 = DBDParameter[0]
-#     kd = DBDParameter[1]
-#     I = np.logspace(-6,4,N)
-#     L = LSlider.value
-#     I = np.logspace(-3,3,N)
-#     y2 = NRModelCaculate(k1,k2,k3,kx1,kx2,I,L,Imax,kd,I0)
-#     source2.data = dict(Inducer = I, Output = y2)
 
 
 def update_DBDData(attr,old,new):
@@ -111,20 +95,12 @@ def update_DBDData(attr,old,new):
     I0 = DBDParameter[0]
     kd = DBDParameter[1]
     DimerParameter = LBDDimerMenu[str(LBDDimerSelect.value)]
-    # NRParameter = LBDNRMenu[str(LBDNRSelect.value)]
     k1 = DimerParameter[0]
     k2 = DimerParameter[1]
     k3 = DimerParameter[2]
     I = np.logspace(-6,4,N)
     y1 = DimerModelCaculate(k1,k2,k3,I,L,Imax,kd,I0)
-    # k1 = NRParameter[0]
-    # k2 = NRParameter[1]
-    # k3 = NRParameter[2]
-    # kx1 = NRParameter[3]
-    # kx2 = NRParameter[4]
-    # y2 = NRModelCaculate(k1,k2,k3,kx1,kx2,I,L,Imax,kd,I0)
     source1.data = dict(Inducer = I, Output = y1)
-    # source2.data = dict(Inducer = I, Output = y2)
 
 
 def update_LSlider_data(attrname,old,new):
@@ -133,21 +109,12 @@ def update_LSlider_data(attrname,old,new):
     I0 = DBDParameter[0]
     kd = KdSlider.value
     DimerParameter = LBDDimerMenu[LBDDimerSelect.value]
-    # NRParameter = LBDNRMenu[LBDNRSelect.value]
     k1 = DimerParameter[0]
     k2 = DimerParameter[1]
     k3 = DimerParameter[2]
     I = np.logspace(-6,4,N)
     y1 = DimerModelCaculate(k1,k2,k3,I,L,Imax,kd,I0)
-    # k1 = NRParameter[0]
-    # k2 = NRParameter[1]
-    # k3 = NRParameter[2]
-    # kx1 = NRParameter[3]
-    # kx2 = NRParameter[4]
-    # L = LSlider.value
-    # y2 = NRModelCaculate(k1,k2,k3,kx1,kx2,I,L,Imax,kd,I0)
     source1.data = dict(Inducer = I, Output = y1)
-    # source2.data = dict(Inducer = I, Output = y2)
     
 
 def update_KdSlider_data(attrname,old,new):
@@ -156,21 +123,12 @@ def update_KdSlider_data(attrname,old,new):
     DBDParameter = DBDMenu[DBDSelect.value]
     I0 = DBDParameter[0]
     DimerParameter = LBDDimerMenu[LBDDimerSelect.value]
-    # NRParameter = LBDNRMenu[LBDNRSelect.value]
     k1 = DimerParameter[0]
     k2 = DimerParameter[1]
     k3 = DimerParameter[2]
     I = np.logspace(-6,4,N)
     y1 = DimerModelCaculate(k1,k2,k3,I,L,Imax,kd,I0)
-    # k1 = NRParameter[0]
-    # k2 = NRParameter[1]
-    # k3 = NRParameter[2]
-    # kx1 = NRParameter[3]
-    # kx2 = NRParameter[4]
-    # L = LSlider.value
-    # y2 = NRModelCaculate(k1,k2,k3,kx1,kx2,I,L,Imax,kd,I0)
     source1.data = dict(Inducer = I, Output = y1)
-    # source2.data = dict(Inducer = I, Output = y2)
 
 
 
@@ -255,7 +213,7 @@ Title = widgets.Div(text="""
 """)
 Description = widgets.Div(text="""
 <hr>
-<p>Use the figure below to explore how changes to the various parameter values. The Dimer module plot are colored in blue while the NR module plot are colored in pink.The figure was generated using the Bokeh plotting framework.</p>
+<p>Use the figure below to explore how changes to the various parameter values. The Dimer module plot are colored in blue.The figure was generated using the Bokeh plotting framework.</p>
 """)
 N=1000
 k1 = 0.0000727
@@ -346,5 +304,6 @@ curdoc().title = "CIC-Designer"
 curdoc().add_root(layout)
 from bokeh.embed import server_document
 url = os.environ["Plot_Bokeh"]
+print(url)
 script = server_document(url)
 # print(script)

@@ -1,15 +1,19 @@
-from WebDataWorld.runtime import ServiceSession
-from Bio.SeqIO import parse, write
+﻿from Bio.SeqIO import parse, write
 from Bio.Seq import Seq
 import requests
+import sys
 import traceback
 from Bio.Restriction import BsaI,BbsI
-
+# sys.path.append(r"C:\Users\admin\Desktop\WebDatabaseBeta\WebDatabase\WebDataWorld\LabDatabase\CaculateModule")
 # from .snapgene_readersnapgene_reader import snapgene_to_dict
 from .CaculateModule import snapgene_reader
-from LabDatabase.ControllerModule import FittingLabels
-from LabDatabase.CaculateModule.ScarIdentify import scarPosition,scarFunction
-from LabDatabase.LabDatabaseException import LabDatabaseException,LabDatabaseGETMethodException,LabDatabasePOSTMethodException
+from ControllerModule import FittingLabels
+from CaculateModule.ScarIdentify import scarPosition,scarFunction
+from LabDatabaseException import LabDatabaseException,LabDatabaseGETMethodException,LabDatabasePOSTMethodException
+from WebDatabase.feature_sanitizer import sanitize_feature_text
+
+
+INTERNAL_HTTP_TIMEOUT = (2, 20)
 
 
 def _unique_nonempty_items(items):
@@ -44,36 +48,44 @@ def _crop_feature_payload(request_body, crop_interval, source_start=None, source
 
 def _save_features(session, django_request, Base_URL, name, file_type, feature_list, feature_api, crop_interval=None):
     from copy import deepcopy
-    from Bio.SeqFeature import SeqFeature, SimpleLocation
+    from Bio.SeqFeature import SeqFeature, SimpleLocation, CompoundLocation
     from Bio.SeqRecord import SeqRecord
-    from .feature_records import feature_rows, apply_feature_color
-    record = SeqRecord(Seq(''), id=name)
-    for feature in feature_list:
+    from Bio.Seq import Seq
+    from LabDatabase.feature_records import feature_rows
+    features = []
+    for original in feature_list:
         if file_type == 'dna':
-            item = SeqFeature(SimpleLocation(int(feature['start']), int(feature['end']),
-                strand={'+': 1, '-': -1}.get(feature.get('strand'))),
-                type=feature['type'], qualifiers={'label': [feature.get('name', '')],
-                                                 'color': [feature.get('color', '')]})
+            strand = {'+': 1, '-': -1, '.': None, '=': 0}.get(original.get('strand'))
+            segments = original.get('segments') or []
+            parts = []
+            for segment in segments:
+                start, end = map(int, segment['@range'].split('-'))
+                parts.append(SimpleLocation(start - 1, end, strand))
+            if not parts:
+                parts = [SimpleLocation(original['start'], original['end'], strand)]
+            if strand == -1:
+                parts.reverse()
+            location = parts[0] if len(parts) == 1 else CompoundLocation(parts, 'join')
+            feature = SeqFeature(location, type=original['type'],
+                qualifiers={'label': [original['name']], 'color': [original['color']]})
         else:
-            item = deepcopy(feature)
-        if item.location is None:
+            feature = deepcopy(original)
+        if feature.location is None:
             continue
-        if crop_interval is not None:
-            start, end = crop_interval
-            if any(int(p.start) < start - 1 or int(p.end) > end for p in item.location.parts):
+        if crop_interval:
+            lo, hi = crop_interval
+            if any(int(p.start) < lo - 1 or int(p.end) > hi for p in feature.location.parts):
                 continue
-            item.location = item.location - (start - 1)
-        apply_feature_color(item)
-        record.features.append(item)
-    response = session.get(f'{Base_URL}delete{feature_api}Feature?name={name}', cookies=django_request.COOKIES)
-    response.raise_for_status()
-    if not response.json().get('success'):
-        raise ValueError('Failed to replace imported features')
-    for row in feature_rows(record):
-        response = session.post(f'{Base_URL}Add{feature_api}Feature/{name}', json=row, cookies=django_request.COOKIES)
-        response.raise_for_status()
-        if not response.json().get('success'):
-            raise ValueError('Failed to save imported feature: ' + row['feature_label'])
+            feature.location = feature.location - (lo - 1)
+        features.append(feature)
+    record = SeqRecord(Seq(''))
+    record.features = features
+    rows = feature_rows(record)
+    # Replace all groups in one transaction at the receiving API.
+    response = session.post(f"{Base_URL}ReplaceFeatures/{feature_api}/{name}",
+        json={'features': rows}, cookies=django_request.COOKIES, timeout=INTERNAL_HTTP_TIMEOUT)
+    if response.status_code != 200 or not response.json().get('success'):
+        raise LabDatabaseException(message='Feature replacement failed: ' + response.text[:200])
 
 def _extract_color_from_note(note):
     if(note != None and note != ""):
@@ -83,7 +95,7 @@ def _extract_color_from_note(note):
                 color = "#"+each.split('#')[-1]
                 return color
 
-def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL, save_feature=False):
+def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL, save_feature=True, task_id=None):
     try:
         FeatureList = []
         if (file_name[1] == "fasta"):
@@ -113,7 +125,7 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
             raise LabDatabaseException(message = "上传文件种类无法处理")
         
         if(Sequence != ""):
-            session = ServiceSession()
+            session = requests.Session()
             token = django_request.COOKIES.get('csrftoken')
             session.headers.update({
                 'User-Agent':'Django-App/1.0',
@@ -135,11 +147,11 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
                 scar_data_body = scarFunction(Sequence)
                 request_body = {"name":name, "sequence":Sequence}
                 print(request_body)
-                SequenceUpdateResponse = session.post(f"{Base_URL}UpdatePlasmidSequence",json=request_body,cookies=django_request.COOKIES)
+                SequenceUpdateResponse = session.post(f"{Base_URL}UpdatePlasmidSequence",json=request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 print(SequenceUpdateResponse.json())
                 if(SequenceUpdateResponse.json()['success'] == False and SequenceUpdateResponse.json()["error_code"] == "not_found"):
                     add_request_body = {"name":name,"sequence":Sequence,"alias":""}
-                    AddSequenceUpdateResponse = session.post(f"{Base_URL}AddPlasmidData",json=add_request_body,cookies=django_request.COOKIES)
+                    AddSequenceUpdateResponse = session.post(f"{Base_URL}AddPlasmidData",json=add_request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                     print(AddSequenceUpdateResponse.json())
                     # if(AddSequenceUpdateResponse.json()["success"] == False):
                     if(AddSequenceUpdateResponse.status_code != 200):
@@ -147,9 +159,9 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
                 
                 Culture_request_body = {"name":name,"ori" : Ori_list,"marker":Marker_list}
                 print(Culture_request_body)
-                CultureResponseResponse = session.post(f"{Base_URL}setPlasmidCulture",json = Culture_request_body, cookies = django_request.COOKIES)
+                CultureResponseResponse = session.post(f"{Base_URL}setPlasmidCulture",json = Culture_request_body, cookies = django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 scar_request_body = {"name":name,"bsmbi":scar_data_body[0],"bsai":scar_data_body[1],"bbsi":scar_data_body[2],"aari":scar_data_body[3],"sapi":scar_data_body[4]}
-                ScarUpdateResponse = session.post(f"{Base_URL}setPlasmidScar",json = scar_request_body,cookies=django_request.COOKIES)
+                ScarUpdateResponse = session.post(f"{Base_URL}setPlasmidScar",json = scar_request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 if(save_feature and (SequenceUpdateResponse.status_code == 200 or (AddSequenceUpdateResponse is not None and AddSequenceUpdateResponse.status_code == 200))):
                     _save_features(session, django_request, Base_URL, name, file_name[1], FeatureList, "Plasmid")
                 print(SequenceUpdateResponse.status_code)
@@ -158,12 +170,12 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
                 else:
                     if(SequenceUpdateResponse.status_code != 200):
                         raise LabDatabaseException(message=f"Plasmid {name} 序列更新失败")
-                    if(AddSequenceUpdateResponse == None or AddSequenceUpdateResponse.status_code != 200):
-                        raise LabDatabaseException(message=f"新建 Plasmid {name} 失败")
                     if(CultureResponseResponse.status_code != 200):
                         raise LabDatabaseException(message = f"Plasmid {name} 保存培养信息失败")
                     if(ScarUpdateResponse.status_code != 200):
                         raise LabDatabaseException(message = f"Plasmid {name} 保存Scar信息失败")
+                    if(AddSequenceUpdateResponse != None and AddSequenceUpdateResponse.status_code != 200):
+                        raise LabDatabaseException(message=f"新建 Plasmid {name} 失败")
             elif(upload_type == "backbone"):
                 Ori_list = []
                 Marker_list = []
@@ -176,31 +188,31 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
                 Marker_list = _unique_nonempty_items(Marker_list)
                 scar_data_body = scarFunction(Sequence)
                 request_body = {"name":name, "sequence":Sequence}
-                SequenceUpdateResponse = session.post(f"{Base_URL}UpdateBackboneSequence",json=request_body,cookies=django_request.COOKIES)
+                SequenceUpdateResponse = session.post(f"{Base_URL}UpdateBackboneSequence",json=request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 print("SequenceUpdateResponse")
                 print(SequenceUpdateResponse.json())
                 if(SequenceUpdateResponse.json()['success'] == False and SequenceUpdateResponse.json()['error_code'] == "not_found"):
                     print("新建backbone")
                     add_request_body = {"name":name,"sequence":Sequence}
-                    AddBackboneResponse = session.post(f"{Base_URL}AddBackbone",json=add_request_body,cookies=django_request.COOKIES)
+                    AddBackboneResponse = session.post(f"{Base_URL}AddBackbone",json=add_request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                     if(AddBackboneResponse.status_code != 200):
                         raise LabDatabaseException(message=f"新建 Backbone {name} 失败")
                 _save_features(session, django_request, Base_URL, name, file_name[1], FeatureList, "Backbone")
                 Culture_request_body = {"name":name,"ori" : Ori_list,"marker":Marker_list}
-                CultureResponseResponse = session.post(f"{Base_URL}setBackboneCulture",json = Culture_request_body, cookies = django_request.COOKIES)
+                CultureResponseResponse = session.post(f"{Base_URL}setBackboneCulture",json = Culture_request_body, cookies = django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 scar_request_body = {"name":name,"bsmbi":scar_data_body[0],"bsai":scar_data_body[1],"bbsi":scar_data_body[2],"aari":scar_data_body[3],"sapi":scar_data_body[4]}
-                ScarUpdateResponse = session.post(f"{Base_URL}setBackboneScar",json = scar_request_body,cookies=django_request.COOKIES)
+                ScarUpdateResponse = session.post(f"{Base_URL}setBackboneScar",json = scar_request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
                 if((SequenceUpdateResponse.status_code == 200 or AddBackboneResponse.status_code == 200) and CultureResponseResponse.status_code == 200 and ScarUpdateResponse.status_code == 200):
                     return True
                 else:
                     if(SequenceUpdateResponse.status_code != 200):
                         raise LabDatabaseException(message=f"Backbone {name} 序列更新失败")
-                    if(AddBackboneResponse.status_code != 200):
-                        raise LabDatabaseException(message=f"新建 Backbone {name} 失败")
                     if(CultureResponseResponse.status_code != 200):
                         raise LabDatabaseException(message = f"Backbone {name} 保存培养信息失败")
                     if(ScarUpdateResponse.status_code != 200):
                         raise LabDatabaseException(message = f"Backbone {name} 保存scar信息失败")
+                    if(AddBackboneResponse != None and AddBackboneResponse.status_code != 200):
+                        raise LabDatabaseException(message=f"新建 Backbone {name} 失败")
             elif(upload_type == "part"):
                 target_seq = ""
                 target_start = 1
@@ -241,19 +253,16 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
                         target_seq = target_seq[:-4]
                         target_end -= 4
                 print(target_seq)
-                request_body = {"name":name, "Level0Sequence":target_seq}
-                SequenceUpdateResponse = session.post(f"{Base_URL}UpdatePartSequence",json=request_body,cookies=django_request.COOKIES)
-                # if(SequenceUpdateResponse.status_code == 200):
-                #     return True
-                if(SequenceUpdateResponse.json()['success'] == False and SequenceUpdateResponse.json()["error_code"] == "not_found"):
-                    add_request_body = {"name":name,"alias":"","Level0Sequence":target_seq,"type":"promoter"}
-                    SequenceAddResponse = session.post(f"{Base_URL}AddPartData",json=add_request_body,cookies=django_request.COOKIES)
-                    if(SequenceAddResponse.status_code != 200):
-                        raise LabDatabaseException(message=f"新建 Part {name} 失败")
-                else:
-                    raise LabDatabaseException(message = f"Part {name} 序列更新失败")
+                request_body = {"name":name, "Level0Sequence":target_seq, "task_id":task_id}
+                upsert_response = session.post(f"{Base_URL}UpsertPartSequence",json=request_body,cookies=django_request.COOKIES,timeout=INTERNAL_HTTP_TIMEOUT)
+                upsert_data = upsert_response.json()
+                upload_warning = upsert_data.get("warning", "")
+                if upsert_response.status_code != 200 or upsert_data.get("success") is not True:
+                    raise LabDatabaseException(message=upsert_data.get("message") or f"Part {name} 保存失败")
                 if(save_feature):
                     _save_features(session, django_request, Base_URL, name, file_name[1], FeatureList, "Part", crop_interval=(target_start, target_end))
+                if upload_warning:
+                    return {"success": True, "warning": upload_warning}
                 return True
             else:
                 raise LabDatabaseException(message=f"上传种类未知")
@@ -319,7 +328,7 @@ def process_map_file(upload_map, file_name, upload_type, django_request,Base_URL
 
 if __name__ == "__main__":
     # import io
-
+    # file_address = r"C:\Users\admin\Desktop\样例数据\level3\WBY6.dna"
     # upload_map_temp = open(file_address)
     # upload_map_temp = upload_map_temp.decode("utf-8")
     # upload_map = io.StringIO(upload_map_temp)

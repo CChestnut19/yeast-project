@@ -83,34 +83,39 @@
                 loadingSpinner.style.display = 'inline-block';
                 assembleBtn.disabled = true;
 
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                try {
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+                    const repositoryName = document.getElementById("repositoryName").innerText;
+                    const result = await apiFetch('/LabDatabase/AssemblyRepo', {
+                        method: "POST",
+                        headers: {
+                            'Content-Type':'application/json',
+                            'X-CSRFToken':csrfToken,
+                        },
+                        body: JSON.stringify({"repositoryName":repositoryName}),
+                    });
 
-                const response = await fetch('/LabDatabase/AssemblyRepo',{
-                    method: "POST",
-                    headers:{
-                        'Content-Type':'application/json',
-                        'X-CSRFToken':csrfToken,
-                    },
-                    body: JSON.stringify({"repositoryName":document.getElementById("repositoryName").innerText}),
-                });
-
-                const result = await response.json();
-
-                if(result.task_id){
-                    alert(result.message);
-                    pollAssemblyTaskStatus(result.task_id,document.getElementById("repositoryName").innerText);
-                    // 更新按钮状态
-                }
-                else{
-                    displayResult(result);
+                    if(result.task_id){
+                        alert(result.message || '组装任务已开始');
+                        pollAssemblyTaskStatus(result.task_id, repositoryName);
+                    } else {
+                        displayResult(result);
+                    }
+                } catch (error) {
+                    resetAssemblyButton();
+                    displayError(`启动组装失败：${error.message}`);
                 }
             }
 
             async function pollAssemblyTaskStatus(task_id, repositoryName){
+                let networkErrors = 0;
+                let polling = false;
                 const pollInterval = setInterval(async () => {
+                    if (polling) return;
+                    polling = true;
                     try{
-                        const response = await fetch(`/LabDatabase/task_status/${task_id}`);
-                        const result = await response.json();
+                        const result = await apiFetch(`/LabDatabase/task_status/${task_id}`, { timeout: 30000 });
+                        networkErrors = 0;
 
                         if(result.status === "completed"){
                             clearInterval(pollInterval);
@@ -131,19 +136,38 @@
                         }
                         else if(result.status === "failed"){
                             clearInterval(pollInterval);
-                            displayError(result.message);
+                            resetAssemblyButton();
+                            displayError(getApiErrorMessage(result, '组装失败'));
                         }
                     }
                     catch(error){
-                        clearInterval(pollInterval);
-                        displayError('轮询失败: '+error.message);
+                        if (error.data?.status === 'failed') {
+                            clearInterval(pollInterval);
+                            resetAssemblyButton();
+                            displayError(getApiErrorMessage(error.data, '组装失败'));
+                            return;
+                        }
+                        networkErrors += 1;
+                        if (error.status === 404 || networkErrors >= 10) {
+                            clearInterval(pollInterval);
+                            resetAssemblyButton();
+                            displayError('无法获取组装状态：' + error.message);
+                        }
+                    } finally {
+                        polling = false;
                     }
-                }, 2000);
+                }, 3000);
+            }
+
+            function resetAssemblyButton(){
+                btnText.textContent = '开始组装';
+                loadingSpinner.style.display = 'none';
+                assembleBtn.disabled = false;
             }
 
 
             function displayError(message){
-                alert(message);
+                alert(getApiErrorMessage({ error: message }));
             }
 
             function displayResult(result){
@@ -156,6 +180,6 @@
                     }
                 }
                 else{
-                    alert("处理失败: "+result.message);
+                    alert("处理失败: " + getApiErrorMessage(result));
                 }
             }

@@ -246,7 +246,7 @@
     <h3 style="width:50%;margin:auto;text-align: center;"> Optimization </h3>
     <hr>
     <div class="OptPartContent" style="width:80%;margin:auto;display:contents;max-width: 800px;">
-      <p style="color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;">Optimization Part calculate LBD and DBD parameter to maximizing the module α*foldchange1 + β*foldchange2. Foldchange1 is ratio, and flodchange2 is difference between expression without inducer and expression with inducer.</p>
+      <p style="color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;">Select the LBD, DBD and TF concentration that maximize log10(induced / basal output) + log10(induced - basal output), with equal weights. Each DBD uses its own baseline. The search covers L = 0.3 to 10 at 2,000 equally spaced points.</p>
     </div>
     <form id = "Opt">
       <div id = "ParameterPart" style = "color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;height:100px;">
@@ -278,11 +278,6 @@
               {% endfor %}
             </select>
           </div>
-          <label for="alpha">α:</label>
-          <input type = "number" id = "alpha" value = 1 required style="width : 30px;margin-left: 10px;">
-          <br>
-          <label for="beta">β:</label>
-          <input type="number" id = "beta" value = 1 required style = "width:30px;margin-left: 10px;">
         </div>
         <div id = "SubmitPart" style="width:50%;float:left;margin-top:20px;">
           <button class="btn btn-primary" type="button" id="notify">Go</button>
@@ -297,6 +292,9 @@
         <br>
         <label for="OptimalL">Optimal L:</label>
         <span id="OptimalL" style="margin:auto;">{{Optimal_L}}</span>
+        <br>
+        <label for="OptimalScore">Optimization score:</label>
+        <span id="OptimalScore"></span>
         <br>
         <label for="OptimalRPU">Optimal RPU:</label>
         <span id="OptimalRPU" style="margin:auto;">{{Optimal_RPU}}</span>
@@ -382,8 +380,6 @@
     </script>
     <script type="text/javascript">
       document.getElementById('notify').addEventListener('click', async function(){
-            var alpha = document.getElementById('alpha').value;
-            var beta = document.getElementById('beta').value;
             var lbd = ""
             var dbd = ""
             if(document.getElementById("LBDSelect").disabled == false){
@@ -396,7 +392,7 @@
               const response = await fetch('/Opt', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: new URLSearchParams({alpha: alpha, beta: beta, lbd: lbd, dbd: dbd}),
+                body: new URLSearchParams({lbd: lbd, dbd: dbd}),
               });
               const result = await response.json();
               if (!response.ok) throw new Error(result.message || 'Optimization failed');
@@ -404,7 +400,9 @@
               document.getElementById('OptimalLBD').textContent = result.LBD;
               document.getElementById('OptimalL').textContent = result.L;
               document.getElementById('OptimalRPU').textContent = result.RPU.toFixed(1);
+              document.getElementById('OptimalScore').textContent = result.score.toFixed(4);
             } catch (error) {
+              alert(error.message);
               console.error('错误信息：', error);
             }
       });

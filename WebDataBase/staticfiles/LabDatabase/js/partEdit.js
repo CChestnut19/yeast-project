@@ -81,13 +81,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 // })
                 .then(response => response.json())
                 .then(result =>{
-                    const data = result.data;
-                    if(data.success){
+                    if(result.success){
                         alert("更新成功");
                         window.history.back();
                     }
                     else{
-                        alert(data.message);
+                        alert(result.message);
                     }
                 });
                 // 更新状态提示

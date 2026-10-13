@@ -11,7 +11,7 @@ def GetPlasmid(api_url,Name,session):
     #     return Plasmid(Name,result[0][5],result[0][0],result[0][1],result[0][2],result[0][3],result[0][4],result[0][6],result[0][7],plasmidIDList,result[0][8])
     # else:
     #     return None
-    response = session.get(f'{api_url}/WebDatabase/PlamsidName?name={Name}')
+    response = session.get(f'{api_url}/WebDatabase/PlasmidName?name={Name}')
     if(response.status_code == 200):
         result = response.json()[0]
         # Name,Sequence,OriClone,OriHost,MarkerClone,MarkerHost,Level,Plate = None,State = None,ParentID = None,Note = None

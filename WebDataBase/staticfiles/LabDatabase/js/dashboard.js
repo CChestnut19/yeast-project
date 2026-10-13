@@ -565,7 +565,7 @@
                     alert(result.message);
                 }
                 else{
-                    alert("上传完成")
+                    alert("下载完成");
                 }
             }
             else{

@@ -1,5 +1,3 @@
-from pathlib import Path
-from django.conf import settings
 from numpy import identity
 from . import KmerIndex
 
@@ -33,7 +31,7 @@ class featureIdentify:
         self.BsubAmyKmer = KmerIndex.KmerIndex()
         
         type = ""
-        with open(getattr(settings, 'BASIC_FEATURE_FILE', Path(__file__).with_name('BasicFeature.txt')), 'r', encoding='utf-8') as file:
+        with open(r'C:\Users\admin\Desktop\WebDatabase\WebDataWorld\LabDatabase\CaculateModule\BasicFeature.txt','r',encoding='utf-8') as file:
             lines = file.readlines()
             for line in lines:
                 line = line.strip('\n')

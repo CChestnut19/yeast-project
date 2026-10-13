@@ -1,9 +1,10 @@
-from django.urls import path,include
+﻿from django.urls import path,include
 from rest_framework.routers import DefaultRouter
 from LabDatabase.AdminManage import admin_views
 from LabDatabase import views,admin
 from .CaculateModule import DNADiagram
 urlpatterns = [
+    path("assembly-version/<int:plasmidid>", views.assembly_version_status, name="assembly_version_status"),
     #index
     path("index",views.index,name="index"),
     path("design-builder", views.design_builder, name="design_builder"),
@@ -11,6 +12,11 @@ urlpatterns = [
     path("design-builder/submit", views.submit_design_assembly, name="submit_design_assembly"),
     path("getdata",views.getData,name="getData"),
     path("filterdata",views.DataFilter,name="filterdata"),
+    path("exportSelectedData", views.export_selected_data, name="export_selected_data"),
+    path("api/strains", views.strain_api, name="strain_api"),
+    path("api/strains/<int:strainid>", views.strain_api, name="strain_detail_api"),
+    path("api/strain-genotypes", views.strain_genotype_api, name="strain_genotype_api"),
+    path("api/strain-genotypes/<int:sgid>", views.strain_genotype_api, name="strain_genotype_detail_api"),
     #user
     path("login",admin.login,name="login"),
     path("logout",admin.logout,name="logout"),

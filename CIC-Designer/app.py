@@ -1,4 +1,5 @@
 import flask
+import io
 from bokeh.client import pull_session
 from bokeh.embed import server_session
 from Services.opt import HtmlReturn
@@ -80,16 +81,16 @@ def getsession():
 @app.route("/Opt",methods=['POST'])
 def Opt():
     session = get_webdb_session()
-    alpha = flask.request.form.get('alpha')
-    beta = flask.request.form.get('beta')
     LBD = flask.request.form.get('LBD') or flask.request.form.get('lbd')
     DBD = flask.request.form.get('DBD') or flask.request.form.get('dbd')
     try:
-        Result = HtmlReturn(alpha,beta,app.config['api_url'],session,LBD,DBD)
+        Result = HtmlReturn(app.config['api_url'],session,LBD,DBD)
     except ValueError as exc:
         return flask.jsonify({'success': False, 'message': str(exc)}), 400
-    #使用Result中的LBD和DBD进行自动化设计对于上游TF的选择
-    response = {'MaxFoldchange':Result[0],"LBD":Result[1],"DBD":Result[2],"L":Result[3],"RPU":Result[4]}
+    except requests.RequestException as exc:
+        return flask.jsonify({'success': False, 'message': 'WebDatabase parameter request failed'}), 502
+    # Score is a composite objective; retain MaxFoldchange as a legacy alias.
+    response = {'score':Result[0], 'MaxFoldchange':Result[0],"LBD":Result[1],"DBD":Result[2],"L":Result[3],"RPU":Result[4]}
     return flask.jsonify(response)
 @app.route("/TFPlot",methods=['GET'])
 def bkapp_page():
@@ -112,15 +113,22 @@ def AssemblyServe():
     LBD = flask.request.form.get('LBD')
     DBD = flask.request.form.get('DBD')
     L = flask.request.form.get('L')
-    print(DBD)
-    print(LBD)
     try:
-        session = get_webdb_session()
-        token = flask.request.headers.get('Token', '')
-        assembly = WebAssembly(LBD, DBD, L, app.config['api_url'], session, token=token)
-        result = assembly.AssemblyFuntion()
-        return flask.jsonify(result)
-    except (AssemblyAPIError, OSError, KeyError) as exc:
+        # Each request owns its Django cookies, so concurrent logins cannot mix.
+        with requests.Session() as session:
+            assembly = WebAssembly(LBD, DBD, L, app.config['api_url'], session)
+            result = assembly.AssemblyFuntion()
+            path = Path(result["file_path"])
+            try:
+                contents = path.read_bytes()
+            finally:
+                if not assembly.output_path:
+                    path.unlink(missing_ok=True)
+        return flask.send_file(
+            io.BytesIO(contents), as_attachment=True,
+            download_name=result["download_name"], mimetype="application/octet-stream",
+        )
+    except (AssemblyAPIError, OSError, KeyError, ValueError, requests.RequestException) as exc:
         return flask.jsonify({"success": False, "message": str(exc)}), 500
 @app.route("/UploadData",methods=['POST'])
 def UploadDataMethod():
@@ -253,8 +261,8 @@ def FittingResult():
     data = {
         "DBD": {
             "Name": dbd_name,
-            "I0": DBD_Data["Kd"],
-            "kd": DBD_Data["I0"],
+            "I0": DBD_Data["I0"],
+            "kd": DBD_Data["Kd"],
         },
         "LBD": {
             "Name": lbd_name,

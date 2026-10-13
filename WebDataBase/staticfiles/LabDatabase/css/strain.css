@@ -1,0 +1,100 @@
+#strain {
+    padding: 1.25rem;
+}
+
+.strain-toolbar,
+.strain-search,
+.strain-actions,
+.strain-genotypes {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+
+.strain-toolbar {
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.strain-search {
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.strain-search .search-input {
+    width: min(420px, 100%);
+}
+
+.strain-table td {
+    vertical-align: middle;
+}
+
+.strain-genotypes {
+    flex-wrap: wrap;
+}
+
+.strain-genotype {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .2rem .5rem;
+    border-radius: 999px;
+    background: #eef4ff;
+    color: #2456a6;
+    font-size: .85rem;
+}
+
+.strain-genotype button {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #b42318;
+    line-height: 1;
+}
+
+.strain-empty {
+    display: none;
+    padding: 2rem;
+    text-align: center;
+    color: #6c757d;
+}
+
+.strain-dialog {
+    border: 0;
+    border-radius: .75rem;
+    width: min(520px, calc(100% - 2rem));
+    padding: 0;
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, .2);
+}
+
+.strain-dialog::backdrop {
+    background: rgba(0, 0, 0, .45);
+}
+
+.strain-form {
+    display: grid;
+    gap: .85rem;
+    padding: 1.25rem;
+}
+
+.strain-form label {
+    display: grid;
+    gap: .3rem;
+}
+
+.strain-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: .5rem;
+}
+
+@media (max-width: 768px) {
+    .strain-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .strain-search {
+        justify-content: stretch;
+    }
+}

@@ -20,13 +20,14 @@ class WebAssembly:
         session,
         api_client = None,
         output_path = None,
-        token = None,
     ):
-        self.LBD = GetPartByName(api_url=api_url,Name=LBD,session = session)
-        self.DBD = GetPartByName(api_url = api_url, Name=DBD, session=session)
-        self.AD = GetPartByName(api_url = api_url,Name="AD",session = session)
-        self.api_url = api_url
-        self.session = session
+        self.api_client = api_client or WebDatabaseAssemblyClient.from_env(
+            session_factory=lambda: session, base_url=api_url,
+        )
+        self.api_url = self.api_client.base_url
+        self.session = self.api_client.session
+        self.lbd_name = LBD
+        self.dbd_name = DBD
         missing = [
             name for name in ("Level2_Backbone_Name", "Level3_Backbone_Name")
             if not os.getenv(name)
@@ -39,23 +40,20 @@ class WebAssembly:
         self.Level2Backbone = os.getenv("Level2_Backbone_Name")
         self.Level3Backbone = os.getenv("Level3_Backbone_Name")
         self.L = L
-        self.api_client = api_client
         self.output_path = output_path or os.getenv("result_file")
-        self.token = token
 
     def CaculatePT(self):
         calculator = Caculate.Caculate(self.api_url, self.session,self.L)
         self.promoter, self.terminator = calculator.CaculateFunction()
 
     def AssemblyFunction(self):
-        print(self.LBD)
-        print(self.DBD)
-        env_path = Path(__file__).resolve().parents[1] / ".env"
-        client = self.api_client or WebDatabaseAssemblyClient(
-            self.api_url, self.token
-        )
+        client = self.api_client
         client.login()
-        self.api_client = client
+        self.LBD = GetPartByName(self.api_url, self.lbd_name, self.session)
+        self.DBD = GetPartByName(self.api_url, self.dbd_name, self.session)
+        self.AD = GetPartByName(self.api_url, "AD", self.session)
+        if any(part is None for part in (self.LBD, self.DBD, self.AD)):
+            raise AssemblyAPIError("Assembly requires existing LBD, DBD and AD parts")
         self.CaculatePT()
         part_names = [
             self.promoter.Name,
@@ -75,31 +73,22 @@ class WebAssembly:
             "backbone": [self.Level2Backbone],
             "plasmid": [],
             "scar":[["",""],["aatg","tatc"],["tatc","ggta"],["ggta","taaa"],["",""]],
-            "task_id": request_uuid,
         }
         level2_task_id = client.submit_assembly(
             level2_payload, "Level2"
         )
-        print(level2_task_id)
         level2_result = client.wait_for_task(level2_task_id, "Level2")
-        level2_assemblies = level2_result.get("assemblies") or []
-        level2_plasmid_name = (
-            level2_assemblies[0].get("plasmidName")
-            if level2_assemblies else None
-        )
-        if not level2_plasmid_name:
-            raise AssemblyAPIError(
-                "Level2 completed without the persisted plasmid name"
-            )
+        plasmid_id = level2_result.get("plasmid_id")
+        if plasmid_id is None:
+            raise AssemblyAPIError("Level2 completed without a persisted plasmid_id")
+        level2_plasmid_name = client.get_plasmid_name(plasmid_id)
 
         level3_payload = {
             "uuid": level3_name,
             "part": [],
             "backbone": [self.Level3Backbone],
-            # PlasmidNeed.Name is varchar(20); bio-app returns the actual
-            # persisted (possibly truncated) name from the Level2 result.
+            # Use the actual stored name resolved from the result ID.
             "plasmid": [level2_plasmid_name],
-            "task_id": request_uuid,
         }
         level3_task_id = client.submit_assembly(
             level3_payload, "Level3"
@@ -107,19 +96,24 @@ class WebAssembly:
         level3_result = client.wait_for_task(
             level3_task_id, "Level3"
         )
-        assemblies = level3_result.get("assemblies") or []
-        download_file_id = assemblies[0].get("downloadFileId") if assemblies else None
-        if not download_file_id:
-            raise AssemblyAPIError(
-                "Level3 completed without a download_url"
-            )
+        download_url = level3_result.get("download_url")
+        if not isinstance(download_url, str) or not download_url:
+            raise AssemblyAPIError("Level3 completed without a download_url")
+        if self.output_path:
+            destination = Path(self.output_path)
+        else:
+            import tempfile
+            destination = Path(tempfile.gettempdir()) / "cic-designer" / f"{level3_name}.gb"
+        file_path = client.download_result(download_url, destination)
         return {
             "success": True,
             "level2_plan_name": level2_name,
             "level2_task_id": level2_task_id,
             "level3_plan_name": level3_name,
             "level3_task_id": level3_task_id,
-            "download_file_id": download_file_id,
+            "download_url": download_url,
+            "file_path": file_path,
+            "download_name": f"{level3_name}.gb",
         }
 
     def AssemblyFuntion(self):

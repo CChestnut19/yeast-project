@@ -1,4 +1,4 @@
-import datetime
+﻿import datetime
 import os
 from Bio.Seq import Seq
 
@@ -137,196 +137,20 @@ class SequenceAnnotator:
         except Exception as e:
             raise e
     @staticmethod
-    def GeneratorBackboneNoSa(name,sequence,file_address, feature_list):
-        try:
-            print("NoSA")
-            accession = "."
-            version = "1.0"
-            Keywords = "."
-            definition = "synthetic circular DNA"
-            reference = "synthetic"
-            # if os.path.exists(os.path.join(f'{file_address}',f'{name}.gbk')):
-            #     return
-            with open(os.path.join(f'{file_address}',f'{name}.gbk'),'w') as file:
-                file.write(("LOCUS       Exported              {0:>6} bp    DNA     {1:>8} CST \
-                    {2}\n").format(len(sequence),"circular",datetime.datetime.now().strftime(DATE_FORMAT)))
-                file.write("DEFINITION  {}\n".format(definition))
-                file.write("ACCESSION   {}\n".format(accession))
-                file.write("VERSION     {}\n".format(version))
-                file.write("KEYWODS     {}\n".format(Keywords))
-                file.write("SOURCE      {}\n".format(reference))
-                file.write("FEATURES             Location/Qualifiers\n")
-
-                for each_feature in feature_list:
-                    if(each_feature["feature_start"] > each_feature["feature_end"]):
-                        if(each_feature["feature_type"].upper() == "CDS"):
-                            # if(sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "GTG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "TTG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATC" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATA" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ACG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "CTG"):
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']})\n")
-                            # else:
-                            #     file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}complement(join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']}))\n")
-                        else:
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']})\n")
-                        file.write(f"                     /label={each_feature['feature_label']}\n")
-
-                        if(each_feature["feature_color"] != None and each_feature["feature_color"] != ""):
-                            file.write(f"                     /color={each_feature['feature_color']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_color']}\n")
-                        elif(each_feature["feature_apeinfo"] != None and each_feature["feature_apeinfo"] != ""):
-                            file.write(f"                     /color={each_feature['feature_apeinfo']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_apeinfo']}\n")
-                        else:
-                            file.write(f"                     /color=#ffff80\n")
-                            file.write(f"                     /ApEinfo_fwdcolor=#ffff80\n")
-                    else:
-                        if(each_feature["feature_type"].upper() == "CDS"):
-                            # print(sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper())
-                            # if(sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "GTG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "TTG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATC" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATA" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ACG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "CTG"):
-                            #     print("zhengxiang")
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}{each_feature['feature_start']}..{each_feature['feature_end']}\n")
-                            # else:
-                            #     print("fanxiang")
-                            #     file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}complement({each_feature['feature_start']}..{each_feature['feature_end']})\n")
-                        else:
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}{each_feature['feature_start']}..{each_feature['feature_end']}\n")
-                        file.write(f"                     /label={each_feature['feature_label']}\n")
-                        if(each_feature["feature_color"] != None and each_feature["feature_color"] != ""):
-                            file.write(f"                     /color={each_feature['feature_color']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_color']}\n")
-                        elif(each_feature["feature_apeinfo"] != None and each_feature["feature_apeinfo"] != ""):
-                            file.write(f"                     /color={each_feature['feature_apeinfo']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_apeinfo']}\n")
-                        else:
-                            file.write(f"                     /color=#ffff80\n")
-                            file.write(f"                     /ApEinfo_fwdcolor=#ffff80\n")
-
-                file.write("ORIGIN\n")
-                numOfline = (len(sequence) // 60) + 1
-                offset = 0
-                for each_line in range(0,numOfline):
-                    file.write(f" "*(9-len(str(1+(60*each_line))))+f"{1+(60*each_line)} ")
-                    if each_line != numOfline - 1:
-                        for i in range(0,6):
-                            if(i != 5):
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                            else:
-                                file.write(f"{sequence[offset:offset+10]}")
-                                offset = offset + 10
-                    else:
-                        col_number = (len(sequence[offset:]) // 10) + 1
-                        for i in range(0,col_number):
-                            if(i != col_number -1):
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                            else:
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                    file.write("\n")
-                file.write('//')
-                file.flush()
-                file.close()
-        except Exception as exc:
-            raise exc
+    def GeneratorBackboneNoSa(name, sequence, file_address, feature_list):
+        from LabDatabase.feature_records import record_from_rows, normalized_record, write_record
+        record = normalized_record(record_from_rows(sequence, feature_list, name=name))
+        write_record(os.path.join(file_address, name + '.gbk'), record)
     
-    def GeneratorPartNoSa(name,sequence,file_address,feature_list,enzyme=""):
-        try:
-        # print("NoSA")
-        # print(feature_list)
-            accession = "."
-            version = "1.0"
-            Keywords = "."
-            definition = "synthetic circular DNA"
-            reference = "synthetic"
-            feature_list = _shift_part_features(feature_list, sequence, enzyme)
-            # if os.path.exists(os.path.join(f'{file_address}',f'{name}.gbk')):
-            #     return
-            with open(os.path.join(f'{file_address}',f'{name}.gbk'),'w') as file:
-                file.write(("LOCUS       Exported              {0:>6} bp    DNA     {1:>8} CST \
-                {2}\n").format(len(sequence),"circular",datetime.datetime.now().strftime(DATE_FORMAT)))
-                file.write("DEFINITION  {}\n".format(definition))
-                file.write("ACCESSION   {}\n".format(accession))
-                file.write("VERSION     {}\n".format(version))
-                file.write("KEYWODS     {}\n".format(Keywords))
-                file.write("SOURCE      {}\n".format(reference))
-                file.write("FEATURES             Location/Qualifiers\n")
-            
-                for each_feature in feature_list:
-                    if(each_feature["feature_start"] > each_feature["feature_end"]):
-                        if(each_feature["feature_type"].upper() == "CDS"):
-                            # if(sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "GTG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "TTG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATC" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATA" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ACG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "CTG"):
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']})\n")
-                            # else:
-                            #     file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}complement(join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']}))\n")
-                        else:
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}join({each_feature['feature_start']}..{len(sequence)},1..{each_feature['feature_end']})\n")
-                        file.write(f"                     /label={each_feature['feature_label']}\n")
-
-                        if(each_feature["feature_color"] != None and each_feature["feature_color"] != ""):
-                            file.write(f"                     /color={each_feature['feature_color']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_color']}\n")
-                        elif(each_feature["feature_apeinfo"] != None and each_feature["feature_apeinfo"] != ""):
-                            file.write(f"                     /color={each_feature['feature_apeinfo']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_apeinfo']}\n")
-                        else:
-                            file.write(f"                     /color=#ffff80\n")
-                            file.write(f"                     /ApEinfo_fwdcolor=#ffff80\n")
-                    else:
-                        if(each_feature["feature_type"].upper() == "CDS"):
-                            # if(sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "GTG" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "TTG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATC" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ATA" or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "ACG"
-                            # or sequence[each_feature["feature_start"]-1:each_feature["feature_start"]+2].upper() == "CTG"):
-                                # print("zhengxiang")
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}{each_feature['feature_start']}..{each_feature['feature_end']}\n")
-                            # else:
-                            #     print("fanxiang")
-                            #     file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}complement({each_feature['feature_start']}..{each_feature['feature_end']})\n")
-                        else:
-                            file.write(f"     {each_feature['feature_type']}{' '*(16-len(each_feature['feature_type']))}{each_feature['feature_start']}..{each_feature['feature_end']}\n")
-                        file.write(f"                     /label={each_feature['feature_label']}\n")
-                        if(each_feature["feature_color"] != None and each_feature["feature_color"] != ""):
-                            file.write(f"                     /color={each_feature['feature_color']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_color']}\n")
-                        elif(each_feature["feature_apeinfo"] != None and each_feature["feature_apeinfo"] != ""):
-                            file.write(f"                     /color={each_feature['feature_apeinfo']}\n")
-                            file.write(f"                     /ApEinfo_fwdcolor={each_feature['feature_apeinfo']}\n")
-                        else:
-                            file.write(f"                     /color=#ffff80\n")
-                            file.write(f"                     /ApEinfo_fwdcolor=#ffff80\n")
-
-                file.write("ORIGIN\n")
-                numOfline = (len(sequence) // 60) + 1
-                offset = 0
-                for each_line in range(0,numOfline):
-                    file.write(f" "*(9-len(str(1+(60*each_line))))+f"{1+(60*each_line)} ")
-                    if each_line != numOfline - 1:
-                        for i in range(0,6):
-                            if(i != 5):
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                            else:
-                                file.write(f"{sequence[offset:offset+10]}")
-                                offset = offset + 10
-                    else:
-                        col_number = (len(sequence[offset:]) // 10) + 1
-                        for i in range(0,col_number):
-                            if(i != col_number -1):
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                            else:
-                                file.write(f"{sequence[offset:offset+10]} ")
-                                offset = offset + 10
-                    file.write("\n")
-                file.write('//')
-                file.flush()
-                file.close()
-        except Exception as exc:
-            raise exc
+    def GeneratorPartNoSa(name, sequence, file_address, feature_list, enzyme=""):
+        from LabDatabase.feature_records import record_from_rows, normalized_record, write_record
+        # Coordinate conversion is independent of strand/group; never clamp a
+        # malformed segment into a valid one.
+        offset = _infer_part_prefix_length(sequence, enzyme)
+        rows = [dict(row, feature_start=row['feature_start'] + offset,
+                     feature_end=row['feature_end'] + offset) for row in feature_list]
+        record = normalized_record(record_from_rows(sequence, rows, name=name))
+        write_record(os.path.join(file_address, name + '.gbk'), record)
 
     def GenerateGBKFile(self, file_address, type="circular"):
         try:
