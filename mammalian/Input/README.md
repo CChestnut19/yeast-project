@@ -1,6 +1,6 @@
 # Required numerical source inputs
 
-The original experimental inputs and archived initial vectors are not included in this repository. Preserve original files and provenance. Predicted responses or another fit's outputs are not experimental observations. This algorithm-only workflow requires no plotting configuration, PDFs or fonts.
+The required original numerical CSVs, sensor mapping and archived initial vectors are not included in this directory. The shared author-supplied [source workbook](../../data/README.md) is available, but it is not automatically converted into these fitting inputs. Preserve original files and provenance. Predicted responses or another fit's outputs are not experimental observations. This algorithm-only workflow requires no plotting configuration, PDFs or fonts.
 
 ## Fitting and numerical validation
 

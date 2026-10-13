@@ -1,0 +1,375 @@
+{
+  "schema_version": 1,
+  "repository_path": "data/Source data.xlsx",
+  "original_filename": "Source data(4).xlsx",
+  "supplied_by": "repository author",
+  "included_on": "2026-10-13",
+  "bytes": 703711,
+  "sha256": "28c095d7796858118591d5a5c1670d2bb56659a75a587687a8170219e55237bf",
+  "workbook_modified": false,
+  "worksheet_count": 21,
+  "validation_scope": "ZIP CRC and cached OOXML cell inventory; no recalculation or scientific verification",
+  "worksheets": [
+    {
+      "name": "Figure 2",
+      "dimension": "A1:AH105",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Figure 3",
+      "dimension": "A1:AH73",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Figure 4",
+      "dimension": "A1:AO752",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Figure 5",
+      "dimension": "A1:AS1143",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Figure 6",
+      "dimension": "A1:AH1019",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Figure 7",
+      "dimension": "A1:AW142",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary figure 2",
+      "dimension": "A1:X139",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 3",
+      "dimension": "A1:S166",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 4",
+      "dimension": "A2:S73",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 5",
+      "dimension": "A3:J11",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 6",
+      "dimension": "A2:J7",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 7",
+      "dimension": "A1:H15",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 8",
+      "dimension": "A1:AW76",
+      "cached_error_cells": [
+        {
+          "cell": "Z12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AB12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AD12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AF12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AH12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AJ12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AL12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AN12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AP12",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AF14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AG14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AH14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AI14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AJ14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AK14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AL14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AM14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AN14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AO14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AP14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AQ14",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AL16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AM16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AN16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AO16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AP16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AQ16",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AL18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AM18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AN18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AO18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AP18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AQ18",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "Z20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AA20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AB20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AC20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AD20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AE20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AF20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AG20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AH20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AI20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AJ20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AK20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AL20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AM20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AN20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AO20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AP20",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "AQ20",
+          "error": "#VALUE!"
+        }
+      ],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 11",
+      "dimension": "A1:V37",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 13",
+      "dimension": "A2:BB482",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 14",
+      "dimension": "A1:AL59",
+      "cached_error_cells": [
+        {
+          "cell": "C35",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "M35",
+          "error": "#VALUE!"
+        },
+        {
+          "cell": "C36",
+          "error": "#VALUE!"
+        }
+      ],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "Supplementary Figure 15",
+      "dimension": "A1:AV69",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "SI-note activator",
+      "dimension": "A1:BW296",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "SI-note repressor",
+      "dimension": "A1:AW100",
+      "cached_error_cells": [
+        {
+          "cell": "AH75",
+          "error": "#DIV/0!"
+        },
+        {
+          "cell": "AH76",
+          "error": "#DIV/0!"
+        },
+        {
+          "cell": "AH77",
+          "error": "#DIV/0!"
+        },
+        {
+          "cell": "AH78",
+          "error": "#DIV/0!"
+        }
+      ],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "SI-note-hybrid",
+      "dimension": "A1:AD76",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    },
+    {
+      "name": "SI-note-12sensor",
+      "dimension": "A1:Q77",
+      "cached_error_cells": [],
+      "uncached_formula_count": 0
+    }
+  ]
+}

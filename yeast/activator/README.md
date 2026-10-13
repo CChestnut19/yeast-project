@@ -13,27 +13,27 @@ python -m yeast.activator --help
 
 ## Required inputs
 
-1. The original `Source data.xlsx`, containing the `SI-note activator` worksheet. Its original layout must cover at least `A1:BW296`; row and column positions map to the 27 panels in `panels.py`.
+1. The author-supplied workbook is included at `data/Source data.xlsx`; see the [source manifest](../../data/README.md). Its `SI-note activator` worksheet covers `A1:BW296`; row and column positions map to the 27 panels in `panels.py`.
 2. `Supplementary_information_tables.tsv`, extracted from the supplementary tables, with tab-separated columns `table_index,row_index,column_index,text`. Indices follow the original scripts: Table 1 contains DBD/operator/KA/T0 values, and Table 2 contains LBD/Kd0/Kb/Kd1 values.
 3. Optionally, the original `source_sheet_dump.json`, passed with `--source-dump`. When supplied, the reader cross-checks the worksheet name, A1 origin, cell values and available workbook hashes.
 
-The supplied archive contained scripts and Python caches, but none of these experimental inputs. `tests/activator_fixture.py` generates synthetic test data only; those fixtures cannot substitute for experimental observations.
+The original script archive contained none of these experimental inputs. The author subsequently supplied the source workbook on 2026-10-13; the original parameter TSV remains missing. `tests/activator_fixture.py` generates synthetic test data only; those fixtures cannot substitute for experimental observations.
 
 The reader uses cached OOXML cell values, preserves textual asterisks and RGB `A9D18E` green fills, and does not calculate Excel formulas. Formulas without cached values and Excel error cells cause an error; calculate and save the original workbook before running this workflow. Recorded formula information retains the original OOXML content. The reader neither expands nor recalculates shared formulas.
 
 ## Commands
 
-Run these commands from the repository or extracted package root. Replace `path/to/source` with the directory containing the original inputs. The examples explicitly write results to `Output/activator`; use `--output-dir` to choose another location.
+Run these commands from the repository or extracted package root. The workbook path below uses the included author-supplied version. Replace `path/to/source` with the directory containing the original parameter TSV and optional comparison files. The examples explicitly write results to `Output/activator`; use `--output-dir` to choose another location.
 
 ```bash
 # Check inputs without creating output files.
-python -m yeast.activator check --source-xlsx "path/to/source/Source data.xlsx" --parameter-table path/to/source/Supplementary_information_tables.tsv
+python -m yeast.activator check --source-xlsx "data/Source data.xlsx" --parameter-table path/to/source/Supplementary_information_tables.tsv
 
 # Extract cached values; replaces the original 00_dump_source_sheet.mjs.
-python -m yeast.activator dump --source-xlsx "path/to/source/Source data.xlsx" --output-dir Output/activator
+python -m yeast.activator dump --source-xlsx "data/Source data.xlsx" --output-dir Output/activator
 
 # Recalculate and independently validate the results.
-python -m yeast.activator run --source-xlsx "path/to/source/Source data.xlsx" --parameter-table path/to/source/Supplementary_information_tables.tsv --output-dir Output/activator
+python -m yeast.activator run --source-xlsx "data/Source data.xlsx" --parameter-table path/to/source/Supplementary_information_tables.tsv --output-dir Output/activator
 
 # Validate results that have already been generated.
 python -m yeast.activator validate --output-dir Output/activator

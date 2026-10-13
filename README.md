@@ -12,6 +12,7 @@
 | `yeast/analysis.py`, `yeast/binding.py` | Shared response, fold-change, Pareto and mass-balance algorithms |
 | Other `yeast/` numerical modules | Distinct calculations consolidated from the ten former root notebooks; see the migration inventory below |
 | `mammalian/Scripts/` | Independent CIC model, constrained fitting, numerical diagnostics and validation |
+| `data/` | Author-supplied source workbook, file hash and worksheet inventory |
 | `tests/` | Reference calculations, input validation and regression tests |
 | `tools/` | Numerical demo and optional traceable draft archive |
 
@@ -44,7 +45,7 @@ All CIC parameter fitters maximize **R² of log10-transformed responses**. Share
 - Note 10 pooled raw R²: `0.8769196761349058`; pooled log10 R²: `0.8721193770575127`.
 - Note 11 A2 log10 R²: `-1.073005331220207`. Negative values are retained.
 - Note 10 uses `1-(1-p_unbound)^2`; Note 11 uses `p_activator*p_unbound^2`. Their parameters and observation units remain distinct.
-- Original activator and mammalian experimental inputs are incomplete. Their synthetic tests do not establish experimental reproduction.
+- The author-supplied [source workbook](data/README.md) is included. Activator parameter TSV and mammalian CSV/mapping/initial-vector inputs remain incomplete. Synthetic tests do not establish experimental reproduction.
 - Historical notebook variants are exploratory algorithms, not verified replacements for the manuscript models.
 
 ## Documentation

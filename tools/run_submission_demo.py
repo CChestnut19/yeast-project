@@ -50,7 +50,7 @@ def main(argv=None):
     output.mkdir(parents=True, exist_ok=True)
     report_path = output / 'demo_report.json'
     report = {'status': 'RUNNING', 'python': platform.python_version(), 'platform': platform.platform(),
-              'not_run': {'activator_experimental': 'Source workbook and parameter TSV not supplied',
+              'not_run': {'activator_experimental': 'Original parameter TSV not supplied; included workbook alone is insufficient',
                           'mammalian_experimental': 'Experimental CSVs, mapping and initial vectors not supplied'},
               'commands': [], 'scope': 'numerical_algorithms'}
     started = time.perf_counter()

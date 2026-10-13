@@ -46,6 +46,16 @@ Expected counts: 1,141 Note 10 replicates and 216 Note 11 means across 12 panels
 
 No plot-related flags are accepted. `PASS` establishes computational agreement on supplied inputs, not full manuscript or experimental validation.
 
+## Included source workbook
+
+The author-supplied workbook is available at `data/Source data.xlsx` with an [integrity manifest](../data/source_data_manifest.json). To extract the activator cached source values:
+
+```text
+python -m yeast.activator dump --source-xlsx "data/Source data.xlsx" --output-dir Output/activator_source
+```
+
+This extraction does not establish experimental reproduction. The original parameter TSV and the mammalian fitting input package remain required. The default demo continues to use the archived Note 10/11 CSVs.
+
 ## Other algorithms
 
 [Individual yeast workflows](../yeast/README.md) and [mammalian fitting](../mammalian/README.md) document inputs and commands. The [root-notebook migration inventory](../docs/NOTEBOOK_MIGRATION.md) documents parameter estimation, optimization and other retained numerical APIs. Historical parameter sets are labeled by source cell; do not silently substitute them for the manuscript parameters.
