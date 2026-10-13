@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>TF Plot</title>
+    <style>
+      html{
+        background:#e6e9e9;
+        display:block;
+      }
+      body {
+        background: #fff;
+        box-shadow: 0 0 2px rgb(0 0 0 / 6%);
+        color:#545454;
+        font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+        font-size:16px;
+        display: flow-root;
+        margin: 0 auto;
+        padding: 2em 2em 4em;
+        max-width: 800px;
+      }
+      #file_upload_label1,
+      #file_upload_button1,
+      #ParaFit,
+      #file_upload_label2,
+      #file_upload_button2{
+        background-color: gainsboro;
+        padding:5px 10px;
+        border-radius: 5px;
+        border:1px ridge black;
+        font-size: 0.8rem;
+        height:auto;
+      }
+      #file_upload_label1:hover,
+      #file_upload_button1:hover,
+      #ParaFit:hover,
+      #file_upload_label2:hover,
+      #file_upload_button2:hover{
+        background-color: ghostwhite;
+      }
+      #file_upload_label1:active,
+      #file_upload_button1:active,
+      #ParaFit:active,
+      #file_upload_label2:active,
+      #file_upload_button2:active{
+        background-color: gray;
+        color: white;
+      }
+      #LoadingMasterDiv{
+          text-align: center;
+      }
+      #LoadingDiv{
+          border:8px solid #f3f3f3;
+          border-top: 8px solid #3498db;
+          border-radius: 50%;
+          width:50px;
+          height:50px;
+          animation: spin 1s linear infinite;
+          margin:20px auto;
+      }
+      @keyframes spin{
+          0%{transform:rotate(0deg);}
+          100%{transform:rotate(360deg);}
+      }
+      table, th, td{
+            border: 1px solid black;
+        }
+        table{
+            margin-top: 20px;
+            width:100%;
+        }
+        th,td{
+            padding:15px;
+            text-align: center;
+        }
+    </style>
+  </head>
+  <body>
+    {{ script|safe }}
+
+    <br>
+    <div id="Upload" style="margin-bottom: 20px;">
+      <h3 style="margin:auto;text-align: center;">Data File Upload</h3>
+      <p style="color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;">Upload Part is used to upload experimental data file to fit the transcription factor parameters.The format of data file used to upload must be same as template.</p>
+      <a href="{{url_for('DownloadTemplate')}}">Download Template Here</a>
+      <hr>
+      <div style="width:80%;float:left;margin-left: 10%;margin-right: 10%;margin-bottom:30px;">
+        <div style="width:50%;float: left;">
+          <form id="UploadSameForm" action="/UploadData" method="POST" enctype="multipart/form-data">
+            <label for="file_upload1" id="file_upload_label1">Upload Experimental Data File</label>
+            <input type="file" name="file" id="file_upload1" accept=".csv" multiple style="opacity: 0;">
+            <div id="preview1" style="font-size: 10px;">
+              <p>No files currently selected for upload</p>
+            </div>
+            <button type="submit" id="file_upload_button1">Submit</button>
+          </form>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label id="selectAlgorithm" for="AlgorithmSelect">Algorithm: </label>
+          <select id="AlgorithmSelect">
+            <option value = "CNN">CNN</option>
+            <option value = "CurveFit">CurveFit</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label id="I0InputLabel" for="I0Input">I0: </label>
+          <input id="I0Input" type="number">
+        </div>
+      </div>
+      <div style="width:20%; float: right;">
+        <button type="button" id="ParaFit">Fitting</button>
+      </div>
+      <div id = "LoadingMasterDiv"></div>
+    </div>
+    <br>
+    <div style="width:100%;margin-top:20px;" id = "ResultShowDiv"></div>
+    
+    <script>
+      let latestUploadId = null;
+      document.getElementById('ParaFit').addEventListener('click', async function(){
+          if (!latestUploadId) {
+            alert("请先上传 CSV 文件");
+            return;
+          }
+          var algorithm = document.getElementById("AlgorithmSelect").value;
+          var I0 = document.getElementById("I0Input").value;
+          document.getElementById("LoadingMasterDiv").innerHTML = "<div id='LoadingDiv'></div><div>Training...</div>";
+          try {
+            const response = await fetch('/Fitting', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: new URLSearchParams({
+                Algorithm: algorithm,
+                I0: I0,
+                upload_id: latestUploadId,
+              }),
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Fitting failed');
+            document.getElementById("LoadingMasterDiv").innerHTML = "";
+            refreshWindow(result.DBD, result.LBD);
+          } catch (error) {
+            console.error("错误信息：", error);
+            document.getElementById("LoadingMasterDiv").innerHTML = `<div>${error.message}</div>`;
+          }
+      });
+      function refreshWindow(DBD,LBD){
+        console.log(DBD,LBD);
+        fetch_str = "/FittingResult?DBD="+DBD+"&LBD="+LBD
+        fetch(fetch_str)
+        .then(response => response.text())
+        .then(html => {
+          console.log(html);
+          document.getElementById("ResultShowDiv").innerHTML = html;
+        })
+        .catch(error => alert("error"));
+      }
+    </script>
+    <script>
+      document.getElementById("UploadSameForm").addEventListener('submit',async function(e){
+        e.preventDefault();
+
+        if (input.files.length === 0) {
+          alert("请至少选择一个 CSV 文件");
+          return;
+        }
+
+        const formData = new FormData(this);
+        const submitButton = document.getElementById("file_upload_button1");
+        submitButton.disabled = true;
+        try{
+          const response = await fetch(this.action,{
+            method: 'POST',
+            body: formData,
+          });
+          const result = await response.json();
+          if (response.ok) {
+            latestUploadId = result.upload_id;
+            alert(result.message || "上传成功");
+          }
+          else{
+            alert(result.message || "上传失败");
+          }
+        }
+        catch(error){
+          alert("上传失败");
+        }
+        finally {
+          submitButton.disabled = false;
+        }
+      })
+      // console.log("7777777777777");
+      const input = document.getElementById("file_upload1");
+      const preview = document.getElementById("preview1");
+      input.addEventListener("change",updateFileDisplay);
+      function updateFileDisplay(){
+        latestUploadId = null;
+        while(preview.firstChild){
+          preview.removeChild(preview.firstChild);
+        }
+        const curFiles = input.files;
+        if(curFiles.length == 0){
+          console.log(curFiles.length);
+          const para = document.createElement("p");
+          para.textContent = "No files selected for upload";
+          preview.appendChild(para);
+        }
+        else{
+          const list = document.createElement("ol");
+          preview.appendChild(list);
+
+          for(const file of curFiles){
+            const listItem = document.createElement("li");
+            const para = document.createElement("p");
+            if(validFileType(file)){
+              console.log(file.name);
+              para.textContent = `File name ${file.name},file size ${returnFileSize(file.size)}.`;
+              listItem.appendChild(para);
+            }
+            else{
+              para.textContent = `File name ${file.name}:Not a valid file type.Update your selection`;
+              listItem.appendChild(para);
+            }
+            list.appendChild(listItem);
+          }
+        }
+      }
+      const fileTypes=["text/csv"];
+      function validFileType(file){
+        console.log(file.type);
+        return fileTypes.includes(file.type);
+      }
+      function returnFileSize(number){
+        if(number < 1024){
+          return `${number} bytes`;
+        }
+        else if(number >= 1024 && number < 1048576){
+          return `${(number/1024).toFixed(1)} KB`;
+        }
+        else if(number > 1048576){
+          return `${(number/1048576).toFixed(1)} MB`;
+        }
+      }
+    </script>
+    <br>
+    <h3 style="width:50%;margin:auto;text-align: center;"> Optimization </h3>
+    <hr>
+    <div class="OptPartContent" style="width:80%;margin:auto;display:contents;max-width: 800px;">
+      <p style="color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;">Optimization Part calculate LBD and DBD parameter to maximizing the module α*foldchange1 + β*foldchange2. Foldchange1 is ratio, and flodchange2 is difference between expression without inducer and expression with inducer.</p>
+    </div>
+    <form id = "Opt">
+      <div id = "ParameterPart" style = "color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin: auto;width:80%;font-size:14px;height:100px;">
+        <br>
+        <div id = ParaPart style="width:50%;float:left;">
+          <label>Optimization Parameters  </label>
+          <br>
+          <div>
+            <input type="checkbox" id="isFixedLBD">
+            <label for = "isFixedLBD">select LBD</label>
+          </div>
+          <div id = "LBDSelectDiv">
+            <select id="LBDSelect">
+              <option value=""></option>
+              {% for LBD in LBDList%}
+              <option>{{LBD}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <input type="checkbox" id="isFixedDBD">
+            <label for = "isFixedLBD">select DBD</label>
+          </div>
+          <div id = "DBDSelectDiv">
+            <select id="DBDSelect">
+              <option value=""></option>
+              {% for DBD in DBDList%}
+              <option>{{DBD}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <label for="alpha">α:</label>
+          <input type = "number" id = "alpha" value = 1 required style="width : 30px;margin-left: 10px;">
+          <br>
+          <label for="beta">β:</label>
+          <input type="number" id = "beta" value = 1 required style = "width:30px;margin-left: 10px;">
+        </div>
+        <div id = "SubmitPart" style="width:50%;float:left;margin-top:20px;">
+          <button class="btn btn-primary" type="button" id="notify">Go</button>
+        </div>
+      </div>
+      <div class="OptOutputPart" style="color:#545454;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;margin:auto;width:80%;font-size:14px;">
+        <label for="OptimalDBD">Optimal DBD:</label>
+        <span id="OptimalDBD" style="margin:auto;">{{Optimal_DBD}}</span>
+        <br>
+        <label for="OptimalLBD">Optimal LBD:</label>
+        <span id = "OptimalLBD" style="margin:auto;">{{Optimal_LBD}}</span>
+        <br>
+        <label for="OptimalL">Optimal L:</label>
+        <span id="OptimalL" style="margin:auto;">{{Optimal_L}}</span>
+        <br>
+        <label for="OptimalRPU">Optimal RPU:</label>
+        <span id="OptimalRPU" style="margin:auto;">{{Optimal_RPU}}</span>
+      </div>
+    </form>
+    <hr>
+    <h3 style="width:50%;margin:auto;text-align: center;"> Assembly </h3>
+    <form>
+      <div>
+        <button class="btn btn-primary" type="button" id = "Assembly">Assembly</button>
+        <span></span>
+      </div>
+    </form>
+    <hr>
+    <script type = "text/javascript">
+      const toggleCheckbox = document.getElementById("isFixedLBD");
+      const selectContainer = document.getElementById("LBDSelectDiv");
+      const LBDSelect = document.getElementById("LBDSelect");
+      
+      toggleCheckbox.addEventListener('change',function(){
+        if(this.checked){
+          LBDSelect.disabled = false;
+        }
+        else{
+          LBDSelect.disabled = true;
+        }
+        
+      })
+
+
+      const toggleCheckbox2 = document.getElementById("isFixedDBD");
+      const selectContainer2 = document.getElementById("DBDSelectDiv");
+      const DBDSelect = document.getElementById("DBDSelect");
+      
+      toggleCheckbox2.addEventListener('change',function(){
+        if(this.checked){
+          DBDSelect.disabled = false;
+        }
+        else{
+          DBDSelect.disabled = true;
+        }
+      })
+
+
+      document.getElementById('Assembly').addEventListener('click', async function(){
+        const button = this;
+        var LBD = document.getElementById('OptimalLBD').textContent;
+        var DBD = document.getElementById('OptimalDBD').textContent;
+        var L = document.getElementById('OptimalL').textContent;
+        button.disabled = true;
+        try {
+          const response = await fetch('/Assembly', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({LBD: LBD, DBD: DBD, L: L})
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Assembly failed');
+          }
+
+          const disposition = response.headers.get('Content-Disposition') || '';
+          const match = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+          const filename = match
+            ? decodeURIComponent(match[1].replace(/\"/g, ''))
+            : 'Level3.gb';
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+          alert('Finish Assembly');
+        } catch (error) {
+          alert(error.message);
+          console.error('Assembly error:', error);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
+    <script type="text/javascript">
+      document.getElementById('notify').addEventListener('click', async function(){
+            var alpha = document.getElementById('alpha').value;
+            var beta = document.getElementById('beta').value;
+            var lbd = ""
+            var dbd = ""
+            if(document.getElementById("LBDSelect").disabled == false){
+              lbd = document.getElementById("LBDSelect").value;
+            }
+            if(document.getElementById("DBDSelect").disabled == false){
+              dbd = document.getElementById("DBDSelect").value;
+            }
+            try {
+              const response = await fetch('/Opt', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: new URLSearchParams({alpha: alpha, beta: beta, lbd: lbd, dbd: dbd}),
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(result.message || 'Optimization failed');
+              document.getElementById('OptimalDBD').textContent = result.DBD;
+              document.getElementById('OptimalLBD').textContent = result.LBD;
+              document.getElementById('OptimalL').textContent = result.L;
+              document.getElementById('OptimalRPU').textContent = result.RPU.toFixed(1);
+            } catch (error) {
+              console.error('错误信息：', error);
+            }
+      });
+    </script>
+    <script type="application/json" id="p1112">
+      {"a42aba30-ebfa-4096-a4f3-d76ac3b25955":{"version":"3.3.0","title":"TF Plot","roots":[{"type":"object","name":"Column","id":"p1107","attributes":{"stylesheets":[{"type":"object","name":"InlineStyleSheet","id":"p1001","attributes":{"css":"\n.title{\n    width:50%;\n    height:100%;\n    font-family:\"Helvetica Neue\",Helvetica,Arial,sans-serif;\n    font-size:16px;\n    margin:auto;\n    text-align:center;\n}\n.description{\n    width:80%;\n    margin:auto;\n    font-family:\"Helvetica Neue\",Helvetica,Arial,sans-serif;\n    font-size:14px;\n}\n.FooterClass{\n    width:100%\n}\n"}},{"type":"object","name":"InlineStyleSheet","id":"p1002","attributes":{"css":"\n.inputs{\n    border:1px solid black;\n    margin-left:30px;\n}\n.sliderpart{\n    margin-top:30px;\n}\n.plot{\n    margin-left:50px;\n}\n.LBDDBDContainerClass{\n    width:50%;\n    margin:auto;\n}\n"}},{"type":"object","name":"InlineStyleSheet","id":"p1003","attributes":{"css":"\n.content{\n    width:80%;\n    margin:auto;\n}\n.inputs{\n    border:1px solid black;\n    width:100%;\n}\n"}}],"children":[{"type":"object","name":"Div","id":"p1006","attributes":{"css_classes":["title"],"text":"\n&lt;h1&gt;TF Plot&lt;/h1&gt;\n"}},{"type":"object","name":"Div","id":"p1007","attributes":{"css_classes":["description"],"text":"\n&lt;hr&gt;\n&lt;p&gt;Use the figure below to explore how changes to the various parameter values. The Dimer module plot are colored in blue while the NR module plot are colored in pink.The figure was generated using the Bokeh plotting framework.&lt;/p&gt;\n"}},{"type":"object","name":"Column","id":"p1106","attributes":{"css_classes":["content"],"stylesheets":[{"id":"p1003"}],"children":[{"type":"object","name":"Row","id":"p1104","attributes":{"css_classes":["inputs"],"stylesheets":[{"id":"p1002"}],"children":[{"type":"object","name":"Column","id":"p1103","attributes":{"css_classes":["sliderpart"],"children":[{"type":"object","name":"Slider","id":"p1090","attributes":{"title":"L","bar_color":"rgb(115,143,193)","start":0,"end":10,"value":5,"step":0.001}},{"type":"object","name":"Slider","id":"p1091","attributes":{"title":"kd","bar_color":"rgb(232,177,157)","start":0,"end":41,"value":6.216347694,"step":0.001}}]}},{"type":"object","name":"Row","id":"p1102","attributes":{"css_classes":["LBDDBDContainerClass"],"stylesheets":[{"type":"object","name":"InlineStyleSheet","id":"p1004","attributes":{"css":"\n.LBDContainerClass{\n    height:250px;\n    width:50%;\n    margin:auto;\n}\n.DBDContainerClass{\n    height:250px;\n    width:50%;\n    margin:auto;\n}\n"}}],"children":[{"type":"object","name":"Column","id":"p1100","attributes":{"css_classes":["LBDContainerClass"],"children":[{"type":"object","name":"Div","id":"p1095","attributes":{"text":"\n&lt;h5&gt; LBD Parameters &lt;/h5&gt;\n"}},{"type":"object","name":"Row","id":"p1098","attributes":{"children":[{"type":"object","name":"Select","id":"p1092","attributes":{"title":"Dimer LBD","options":["acVHH","LasR","RpaR","BjaR"],"value":"acVHH"}}]}},{"type":"object","name":"Row","id":"p1099","attributes":{"children":[{"type":"object","name":"Select","id":"p1093","attributes":{"title":"NR LBD","options":["ER","DHBR","PR","GR","MR"],"value":"ER"}}]}}]}},{"type":"object","name":"Column","id":"p1101","attributes":{"css_classes":["DBDContainerClass"],"children":[{"type":"object","name":"Div","id":"p1096","attributes":{"text":"\n&lt;h5&gt; DBD Parameters &lt;/h5&gt;\n"}},{"type":"object","name":"Select","id":"p1094","attributes":{"title":"DBD","options":["CI434","LexAs5","LexA87","LexAs23","HKCI","RecApact","DeoR","PurR","LexAs15","LexAs14","CI OL1","CI OR1","CI Osym"],"value":"CI434"}}]}}]}}]}},{"type":"object","name":"Row","id":"p1105","attributes":{"children":[{"type":"object","name":"Figure","id":"p1014","attributes":{"css_classes":["plot"],"width":300,"height":300,"x_range":{"type":"object","name":"Range1d","id":"p1024","attributes":{"start":0.001,"end":100}},"y_range":{"type":"object","name":"Range1d","id":"p1025","attributes":{"start":0.01,"end":100}},"x_scale":{"type":"object","name":"LogScale","id":"p1026"},"y_scale":{"type":"object","name":"LogScale","id":"p1027"},"title":{"type":"object","name":"Title","id":"p1017","attributes":{"text":"Dimer Plot","text_font_size":"16px"}},"renderers":[{"type":"object","name":"GlyphRenderer","id":"p1049","attributes":{"data_source":{"type":"object","name":"ColumnDataSource","id":"p1008","attributes":{"selected":{"type":"object","name":"Selection","id":"p1009","attributes":{"indices":[],"line_indices":[]}},"selection_policy":{"type":"object","name":"UnionRenderers","id":"p1010"},"data":{"type":"map","entries":[["Inducer",{"type":"ndarray","array":{"type":"bytes","data":"/Knx0k1iUD90n2MsbtZSP1RV/n+fqFU/eBw5GfjmWD/XV+tUqqFcP+hoJ8GqdWA/EzBdcLHsYj8NzDdFOMJlPwNTMDFmBGk/QttjtYDDbD+zv5WRHolwP5WZ3gMPA3M/KXmqSu/bdT9/KyER9yF5PwG9RBN/5Xw/yBFIX6mcgD+8EgAGhxmDP3GsFrTE9YU/GJUm4qo/iT9WztCdpQeNP7m4aUVLsJA/7JH+lRkwkz8q9maluA+WP1gTjM2BXZk/NruChPQpnT8iKkZfBMSgP374O9PGRqM/31iwQssppj9Y9838e3upP0VMDfdrTK0/lR1JyNTXsD91Pj/djl2zP7B7MrD8Q7Y/mpmZmZmZuT8lqVslDG+9P6qy/pu868A/PZ6003F0wz+n3FcSTV7GP+qTzc3at8k/HZuRP9WRzT9qlxP2u//QP9vAbdZvi9M/TAO2jbx41j+I+3nDP9bZP/jPC3bHtN0/qC5V8tIT4T/76WEFiaLjP6mzDUdLk+Y/yZvgpMj06T9FHWD54tftP7i2sawBKPE/eySugL258z8wIUtj+a32P6QwdZx1E/o/BcRd+if7/T9QcDhBSDwBQB1vlWgN0QNAQiKGB8fIBkDWod3URjIKQEW0DaqWHg5AccUZzKZQEUA/6YDdeOgTQJljAlm04xZAOT7yeDxRGkCW0bI5L0IeQKJwp2kdZSFAAAAAAAAAJEAlnC99wf4mQCr3vbNWcCpAQDfK2vFlLkBdpFQ2rHkxQImbyPCiFzRAKMGpme4ZN0CdnH6wlY86QF59C7/eiT5AmDK2TlOOQUCITLfQYS9EQHo6OdQ7NUdA5xilmvmuSkCY/WgY9q1OQFy0gs8So1FAtXnPwDxHVEDeFtNSqVBXQICt1Z2CzlpAABkQGTjSXkDtsZLV6rdhQPqNO+IzX2RAHUGZOzdsZ0CFL+jlMO5qQKZ9afOk9m5AycrgfdvMcUB1Jk1WR3d0QN202rTlh3dAgETongQOe0BzbBnaPBt/QNDdieXk4YFAnEB9PnePhEC9sxPltKOHQPyfFfX9LYtAAAAAAABAj0A="},"shape":[100],"dtype":"float64","order":"little"}],["Output",{"type":"ndarray","array":{"type":"bytes","data":"r+v7lE0b3z9FX4X4qlngPzSM258FZ+E/A0/OsC3K4j9dfzjNxp3kP3T7lIlYBOc/247jeGYq6j/+dw127EjuP/jDNNsZ1PE/vp9N4GxR9T8JDnw3WtT5P9pSNMN7oP8/TJ1NhaeCA0AaLD2waC4IQIGQnsvIAw5AoFHnmkyZEkBjohM5KPIWQGDPopIJGhxAN0J0N2QJIUC/aDzpKmckQJWYIzwvFihATVF2RI/9K0AGkxOMBf4vQA36G7Po+jFAShxMapviM0D7yfdbLak1QMeY96DGRTdAY7B4wd2zOEC0vhtGsPI5QBHA43tQBDtAeIlMMZzsO0COXRlJVbA8QAzssYN1VD1AjWD/UL/dPUDicNr5gFA+QFT0HKl7sD5AT2HgEOEAP0DaZ02NXUQ/QEi3ufEnfT9A246Z2RKtP0BZ3VY6ndU/QB0wTCgB+D9A/D8+O6AKQED7ZMScFxdAQEtW3TG+IUBAdi0BYNwqQECADDhJrjJAQLlZGQ9mOUBAmzIEpC0/QEA6D1dBKERAQJ/UI5VzSEBAMDYwtihMQED0LAfqXE9AQDL1aUYiUkBAAVt4NYhUQEDF71rim1ZAQLOoAZNoWEBAXeSU8vdZQEBcfndPUltAQHjTIs9+XEBAyjOwmYNdQEAvCYf+ZV5AQLVRXpMqX0BAgp+GTtVfQEB6O0SdaWBAQKe13HbqYEBAaBrebFphQEBRoA65u2FAQGO8YEkQYkBAdzA4ylliQEAzIUCvmWJAQCX7BzvRYkBAvneUhQFjQEDhEQuCK2NAQJtmmANQY0BABiKtwW9jQEAzBalbi2NAQGMkCFyjY0BALpgjO7hjQEDJaJRhymNAQDpmRSraY0BAZNo+5OdjQEDifjXU82NAQG7V5DX+Y0BA1eU7PQdkQECjcGIXD2RAQGPUm+sVZEBAty4M3BtkQEAXp2MGIWRAQMpKc4QlZEBAuW2ubClkQEBgH5vSLGRAQHXsM8cvZEBAw9o8WTJkQECOS42VNGRAQIk4UIc2ZEBAXg48ODhkQECAPcOwOWRAQBN1Pvg6ZEBAxFsRFTxkQEA="},"shape":[100],"dtype":"float64","order":"little"}]]}}},"view":{"type":"object","name":"CDSView","id":"p1050","attributes":{"filter":{"type":"object","name":"AllIndices","id":"p1051"}}},"glyph":{"type":"object","name":"Line","id":"p1046","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#4D80E6","line_width":2}},"nonselection_glyph":{"type":"object","name":"Line","id":"p1047","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#4D80E6","line_alpha":0.1,"line_width":2}},"muted_glyph":{"type":"object","name":"Line","id":"p1048","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#4D80E6","line_alpha":0.2,"line_width":2}}}}],"toolbar":{"type":"object","name":"Toolbar","id":"p1023","attributes":{"tools":[{"type":"object","name":"CrosshairTool","id":"p1038"},{"type":"object","name":"PanTool","id":"p1039"},{"type":"object","name":"ResetTool","id":"p1040"},{"type":"object","name":"SaveTool","id":"p1041"},{"type":"object","name":"WheelZoomTool","id":"p1042","attributes":{"renderers":"auto"}}]}},"left":[{"type":"object","name":"LogAxis","id":"p1033","attributes":{"ticker":{"type":"object","name":"LogTicker","id":"p1034","attributes":{"num_minor_ticks":10,"mantissas":[1,5]}},"formatter":{"type":"object","name":"LogTickFormatter","id":"p1035"},"major_label_policy":{"type":"object","name":"AllLabels","id":"p1036"}}}],"below":[{"type":"object","name":"LogAxis","id":"p1028","attributes":{"ticker":{"type":"object","name":"LogTicker","id":"p1029","attributes":{"num_minor_ticks":10,"mantissas":[1,5]}},"formatter":{"type":"object","name":"LogTickFormatter","id":"p1030"},"major_label_policy":{"type":"object","name":"AllLabels","id":"p1031"}}}],"center":[{"type":"object","name":"Grid","id":"p1032","attributes":{"axis":{"id":"p1028"}}},{"type":"object","name":"Grid","id":"p1037","attributes":{"dimension":1,"axis":{"id":"p1033"}}}]}},{"type":"object","name":"Figure","id":"p1052","attributes":{"width":300,"height":300,"x_range":{"type":"object","name":"Range1d","id":"p1062","attributes":{"start":0.001,"end":100}},"y_range":{"type":"object","name":"Range1d","id":"p1063","attributes":{"start":0.01,"end":100}},"x_scale":{"type":"object","name":"LogScale","id":"p1064"},"y_scale":{"type":"object","name":"LogScale","id":"p1065"},"title":{"type":"object","name":"Title","id":"p1055","attributes":{"text":"NR Plot","text_font_size":"16px"}},"renderers":[{"type":"object","name":"GlyphRenderer","id":"p1087","attributes":{"data_source":{"type":"object","name":"ColumnDataSource","id":"p1011","attributes":{"selected":{"type":"object","name":"Selection","id":"p1012","attributes":{"indices":[],"line_indices":[]}},"selection_policy":{"type":"object","name":"UnionRenderers","id":"p1013"},"data":{"type":"map","entries":[["Inducer",{"type":"ndarray","array":{"type":"bytes","data":"/Knx0k1iUD90n2MsbtZSP1RV/n+fqFU/eBw5GfjmWD/XV+tUqqFcP+hoJ8GqdWA/EzBdcLHsYj8NzDdFOMJlPwNTMDFmBGk/QttjtYDDbD+zv5WRHolwP5WZ3gMPA3M/KXmqSu/bdT9/KyER9yF5PwG9RBN/5Xw/yBFIX6mcgD+8EgAGhxmDP3GsFrTE9YU/GJUm4qo/iT9WztCdpQeNP7m4aUVLsJA/7JH+lRkwkz8q9maluA+WP1gTjM2BXZk/NruChPQpnT8iKkZfBMSgP374O9PGRqM/31iwQssppj9Y9838e3upP0VMDfdrTK0/lR1JyNTXsD91Pj/djl2zP7B7MrD8Q7Y/mpmZmZmZuT8lqVslDG+9P6qy/pu868A/PZ6003F0wz+n3FcSTV7GP+qTzc3at8k/HZuRP9WRzT9qlxP2u//QP9vAbdZvi9M/TAO2jbx41j+I+3nDP9bZP/jPC3bHtN0/qC5V8tIT4T/76WEFiaLjP6mzDUdLk+Y/yZvgpMj06T9FHWD54tftP7i2sawBKPE/eySugL258z8wIUtj+a32P6QwdZx1E/o/BcRd+if7/T9QcDhBSDwBQB1vlWgN0QNAQiKGB8fIBkDWod3URjIKQEW0DaqWHg5AccUZzKZQEUA/6YDdeOgTQJljAlm04xZAOT7yeDxRGkCW0bI5L0IeQKJwp2kdZSFAAAAAAAAAJEAlnC99wf4mQCr3vbNWcCpAQDfK2vFlLkBdpFQ2rHkxQImbyPCiFzRAKMGpme4ZN0CdnH6wlY86QF59C7/eiT5AmDK2TlOOQUCITLfQYS9EQHo6OdQ7NUdA5xilmvmuSkCY/WgY9q1OQFy0gs8So1FAtXnPwDxHVEDeFtNSqVBXQICt1Z2CzlpAABkQGTjSXkDtsZLV6rdhQPqNO+IzX2RAHUGZOzdsZ0CFL+jlMO5qQKZ9afOk9m5AycrgfdvMcUB1Jk1WR3d0QN202rTlh3dAgETongQOe0BzbBnaPBt/QNDdieXk4YFAnEB9PnePhEC9sxPltKOHQPyfFfX9LYtAAAAAAABAj0A="},"shape":[100],"dtype":"float64","order":"little"}],["Output",{"type":"ndarray","array":{"type":"bytes","data":"l1nItSr+4z/k8vERPQ/oPweTn8ouW+0/OUqpZywd8j9ReIv8xoz2PwboFAUOPvw/QXEV2Ae/AUCYq+6Q8lEGQNt78hd3BgxAdAoFC22FEUAH12nvscMVQLqQ8VtwyxpAoyX8rYFPIEA66fuE45gjQH/30m/kMidA86Ye/zEGK0DJcXcYNfUuQGXTcarSbzFAnff1Hl5TM0C/O8BPdBg1QPyxMX0PtjZAG4TaVTsnOEDgzHB8q2o5QLp6vQXlgTpAhOAwnUhwO0DZzBTkNDo8QCJ9LERc5DxAFODd9VJzPUAsKtIuTes9QLEPQdIAUD5AFPb7Wp6kPkAfplpA1+s+QOw7GQfrJz9AAKSdsbZaP0BU7F0axIU/QHM2QPtXqj9AZMH5In7JP0BTPRPEE+Q/QJ5fBv/P+j9AWrDCbyUHQED0vzeFgQ9AQP4iZCuxFkBARS+SwuAcQEB1DYigNSJAQHfOJkjPJkBAw79/ZsgqQECD+AqhNy5AQNXlTD4wMUBA3ItPsMIzQEBCks0G/TVAQDF+t03rN0BA7gDH25c5QEA9rxOUCztAQGLbBB1OPEBAdNyEDmY9QEBRzvsYWT5AQDpHTSYsP0BAbVfZdeM/QEDOClK0gkBAQM76EBANQUBAUkF6SoVBQECkueHG7UFAQNm5U5dIQkBAqliSh5dCQECPK4sm3EJAQLWYfs4XQ0BAi+sIrEtDQEDQ8zXEeENAQB3NwfmfQ0BA4kWkEcJDQEBQCQC330NAQCcLi375Q0BALaCC6Q9EQEDgETtoI0RAQBtEWFw0REBATR+7GkNEQEB71C3tT0RAQFuu1xNbREBAXfN/xmREQEC1V6Y1bURAQEKedot0REBA/kWc7HpEQEDaevp4gERAQE/xS0yFREBAWNetfolEQEBFmhgljURAQJ/jyFGQREBAzN6aFJNEQEBwk1l7lURAQMvjA5KXREBAB4oIY5lEQEDQQXr3mkRAQP0jPVecREBA0RcuiZ1EQECcH0WTnkRAQIMss3qfREBA5g78Q6BEQEAwBQ3zoERAQP5ZUIuhREBAy3O+D6JEQEA="},"shape":[100],"dtype":"float64","order":"little"}]]}}},"view":{"type":"object","name":"CDSView","id":"p1088","attributes":{"filter":{"type":"object","name":"AllIndices","id":"p1089"}}},"glyph":{"type":"object","name":"Line","id":"p1084","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#FA8072","line_width":2}},"nonselection_glyph":{"type":"object","name":"Line","id":"p1085","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#FA8072","line_alpha":0.1,"line_width":2}},"muted_glyph":{"type":"object","name":"Line","id":"p1086","attributes":{"x":{"type":"field","field":"Inducer"},"y":{"type":"field","field":"Output"},"line_color":"#FA8072","line_alpha":0.2,"line_width":2}}}}],"toolbar":{"type":"object","name":"Toolbar","id":"p1061","attributes":{"tools":[{"type":"object","name":"CrosshairTool","id":"p1076"},{"type":"object","name":"PanTool","id":"p1077"},{"type":"object","name":"ResetTool","id":"p1078"},{"type":"object","name":"SaveTool","id":"p1079"},{"type":"object","name":"WheelZoomTool","id":"p1080","attributes":{"renderers":"auto"}}]}},"left":[{"type":"object","name":"LogAxis","id":"p1071","attributes":{"ticker":{"type":"object","name":"LogTicker","id":"p1072","attributes":{"num_minor_ticks":10,"mantissas":[1,5]}},"formatter":{"type":"object","name":"LogTickFormatter","id":"p1073"},"major_label_policy":{"type":"object","name":"AllLabels","id":"p1074"}}}],"below":[{"type":"object","name":"LogAxis","id":"p1066","attributes":{"ticker":{"type":"object","name":"LogTicker","id":"p1067","attributes":{"num_minor_ticks":10,"mantissas":[1,5]}},"formatter":{"type":"object","name":"LogTickFormatter","id":"p1068"},"major_label_policy":{"type":"object","name":"AllLabels","id":"p1069"}}}],"center":[{"type":"object","name":"Grid","id":"p1070","attributes":{"axis":{"id":"p1066"}}},{"type":"object","name":"Grid","id":"p1075","attributes":{"dimension":1,"axis":{"id":"p1071"}}}]}}]}}]}},{"type":"object","name":"Div","id":"p1097","attributes":{"css_classes":["FooterClass"],"stylesheets":[{"type":"object","name":"InlineStyleSheet","id":"p1005","attributes":{"css":"\n.bk-clearfix{\n    width:100%;\n}\n"}}],"text":"\n&lt;hr&gt;\n"}}]}}]}}
+    </script>
+  </body>
+</html>

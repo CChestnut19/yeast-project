@@ -1,0 +1,34 @@
+2026-09-23 10:46:25 [INFO] django.utils.autoreload: Watching for file changes with StatReloader
+2026-09-23 10:47:04 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:04 [INFO] django.server: "POST /LabDatabase/AssemblyWithoutRepo HTTP/1.1" 200 117
+2026-09-23 10:47:07 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:07 [INFO] django.server: "GET /LabDatabase/task_status/f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 122
+2026-09-23 10:47:08 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:09 [INFO] django.server: "GET /LabDatabase/task_status/f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 122
+2026-09-23 10:47:11 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:11 [INFO] django.server: "GET /LabDatabase/task_status/f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 122
+2026-09-23 10:47:13 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:13 [INFO] django.server: "GET /LabDatabase/task_status/f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 122
+2026-09-23 10:47:14 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:14 [INFO] django.server: "GET /LabDatabase/task_status/f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 2290
+2026-09-23 10:47:31 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:47:31 [INFO] django.server: "GET /LabDatabase/getAssembly/e03c7cae-b1f9-451d-87d8-b10767cbd953?task_id=f1d99198-92c9-4273-b28e-ae3bc35e4960 HTTP/1.1" 200 12721
+2026-09-23 10:50:31 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:31 [INFO] django.server: "POST /LabDatabase/AssemblyWithoutRepo HTTP/1.1" 200 117
+2026-09-23 10:50:33 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:33 [INFO] django.server: "GET /LabDatabase/task_status/0730efa6-99a3-4347-8372-1b93c67206a9 HTTP/1.1" 200 2290
+2026-09-23 10:50:35 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:35 [INFO] django.server: "GET /LabDatabase/getAssembly/458c4985-1f5c-4f42-9290-e661c726cae3?task_id=0730efa6-99a3-4347-8372-1b93c67206a9 HTTP/1.1" 200 12721
+2026-09-23 10:50:47 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:47 [INFO] django.server: "POST /LabDatabase/AssemblyWithoutRepo HTTP/1.1" 200 117
+2026-09-23 10:50:50 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:50 [INFO] django.server: "GET /LabDatabase/task_status/276f5303-9bd4-4999-827d-67c30120d2fc HTTP/1.1" 200 2290
+2026-09-23 10:50:51 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7103
+2026-09-23 10:50:51 [INFO] django.server: "GET /LabDatabase/getAssembly/3a93595f-5572-4a49-b21d-687444ae9124?task_id=276f5303-9bd4-4999-827d-67c30120d2fc HTTP/1.1" 200 12721
+2026-09-23 11:04:55 [INFO] django.utils.autoreload: D:\PolarisKitAssembly\PolarisKitAssembly\WebDataBase\LabDatabase\assembly_inputs.py changed, reloading.
+2026-09-23 11:04:57 [INFO] django.utils.autoreload: Watching for file changes with StatReloader
+2026-09-23 16:51:33 [INFO] django.utils.autoreload: Watching for file changes with StatReloader
+2026-09-23 16:53:01 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7104
+2026-09-23 16:53:01 [INFO] django.server: "POST /LabDatabase/AssemblyWithoutRepo HTTP/1.1" 200 117
+2026-09-23 16:53:03 [INFO] django.server: "GET /WebDatabase/login HTTP/1.1" 200 7104
+2026-09-23 16:53:03 [INFO] django.server: "GET /LabDatabase/task_status/ace16b14-0cd0-4323-b02b-3be269ae22a4 HTTP/1.1" 200 364
