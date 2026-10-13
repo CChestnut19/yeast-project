@@ -1,5 +1,7 @@
-# License status
+# Software license
 
-The author requested a draft while the license choice remains unresolved. No license is granted by this status file and no license text has been added.
+The source code is licensed under the [MIT License](../LICENSE), selected by the author on 2026-10-13. SPDX identifier: `MIT`.
 
-Before a final release, confirm the rights holder, software license and terms for the included data. Update repository metadata and Code availability accordingly. External packages retain their own licenses. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+The copyright notice uses `yeast-project contributors`. This collective notice does not establish the individual software-author list for manuscript citation.
+
+The full license text is included at the repository root and in the submission archive. External packages retain their own licenses. Data distribution terms remain subject to author confirmation; see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
