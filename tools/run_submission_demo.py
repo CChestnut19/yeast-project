@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def check_outputs(output_dir):
-    reference = json.loads((ROOT / 'tests/fixtures/repressor_reference.json').read_text(encoding='utf-8'))
+    reference = json.loads((ROOT / 'submission/reference_metrics.json').read_text(encoding='utf-8'))
     note10 = json.loads((output_dir / 'note10/metrics.json').read_text(encoding='utf-8'))
     note11 = json.loads((output_dir / 'note11/metrics.json').read_text(encoding='utf-8'))
     for sensor, expected in reference['note10']['per_sensor'].items():

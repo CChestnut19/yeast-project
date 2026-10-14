@@ -18,14 +18,14 @@ def extract_measurements(values, green_cells, panels=PANELS):
     def append_raw(
         panel: Panel,
         plot_type: str,
-        ctf: float,
+        c_TF_all: float,
         dose_source: float,
         replicate: int,
         value,
         r0: int,
         c0: int,
         replicate_group: str,
-        nominal_ctf: float | None = None,
+        c_TF_all_nominal: float | None = None,
         batch_id: str | None = None,
     ) -> None:
         numeric, starred = parse_cell(value)
@@ -33,12 +33,12 @@ def extract_measurements(values, green_cells, panels=PANELS):
             if value is not None and str(value).strip():
                 raise ValueError(f"Non-numeric response at {excel_col(c0)}{r0 + 1}: {value!r}")
             return
-        if not all(math.isfinite(x) and x >= 0 for x in (ctf, dose_source)):
+        if not all(math.isfinite(x) and x >= 0 for x in (c_TF_all, dose_source)):
             raise ValueError(f"Invalid concentration at {excel_col(c0)}{r0 + 1}")
         factor = unit_factor(panel.dose_unit)
         green_fill = is_green_cell(r0, c0)
-        nominal = float(ctf if nominal_ctf is None else nominal_ctf)
-        actual = float(ctf)
+        nominal = float(c_TF_all if c_TF_all_nominal is None else c_TF_all_nominal)
+        actual = float(c_TF_all)
         if nominal == 0:
             input_relative_deviation = 0.0 if actual == 0 else float("nan")
             plot_input_tolerance_status = "ZERO_REFERENCE_SOURCE_GROUP"
@@ -55,12 +55,12 @@ def extract_measurements(values, green_cells, panels=PANELS):
             "dbd": panel.dbd,
             "operator": panel.operator,
             "lbd": panel.lbd,
-            "inducer": panel.inducer,
+            "inducer_name": panel.inducer_name,
             "source_sheet": "SI-note activator",
             "source_cell": f"{excel_col(c0)}{r0 + 1}",
             "plot_type": plot_type,
             "input_rpu": actual,
-            "actual_input_rpu": actual,
+            "c_TF_all": actual,
             "nominal_input_rpu": nominal,
             "input_relative_deviation_from_nominal": input_relative_deviation,
             "plot_input_tolerance_status": plot_input_tolerance_status,
@@ -68,7 +68,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
             "inducer_concentration_source": float(dose_source),
             "inducer_source_unit": panel.dose_unit,
             "inducer_to_uM_factor": factor,
-            "inducer_concentration_uM": float(dose_source) * factor,
+            "c_I": float(dose_source) * factor,
             "replicate": replicate,
             "replicate_group": replicate_group,
             "batch_id": batch_id or replicate_group,
@@ -80,7 +80,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
             "exclusion_reason": "source cell has trailing *; meaning not defined in supplied manuscript" if starred else "",
         })
 
-    def dose_batch_segments(header_row: int, group_start: int, width: int, nominal_ctf: float) -> list[tuple[int, int, float, int]]:
+    def dose_batch_segments(header_row: int, group_start: int, width: int, c_TF_all_nominal: float) -> list[tuple[int, int, float, int]]:
         """Return (start_col, end_col_exclusive, actual_input, batch_number).
 
         Numeric cells in the source dose-response header mark the beginning of
@@ -94,7 +94,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
             if number is not None:
                 numeric_headers.append((c0, float(number)))
         if not numeric_headers or numeric_headers[0][0] != group_start:
-            numeric_headers.insert(0, (group_start, float(nominal_ctf)))
+            numeric_headers.insert(0, (group_start, float(c_TF_all_nominal)))
         segments: list[tuple[int, int, float, int]] = []
         for batch_index, (start_col, actual_input) in enumerate(numeric_headers, start=1):
             end_col = numeric_headers[batch_index][0] if batch_index < len(numeric_headers) else group_start + width
@@ -113,18 +113,18 @@ def extract_measurements(values, green_cells, panels=PANELS):
     ) -> None:
         for r0 in response_rows:
             dose = clean_number(values[r0][dose_col])
-            for input_index, (group_start, width, nominal_ctf) in enumerate(
+            for input_index, (group_start, width, c_TF_all_nominal) in enumerate(
                 zip(group_starts, group_widths, nominal_inputs), start=1
             ):
                 for start_col, end_col, actual_ctf, batch_number in dose_batch_segments(
-                    header_row, group_start, width, nominal_ctf
+                    header_row, group_start, width, c_TF_all_nominal
                 ):
                     batch_id = f"dose_input_{input_index}_batch_{batch_number}{batch_suffix}"
                     for replicate, c0 in enumerate(range(start_col, end_col), start=1):
                         append_raw(
                             panel, "dose_response", actual_ctf, dose, replicate,
                             values[r0][c0], r0, c0, f"dose_input_{input_index}",
-                            nominal_ctf=nominal_ctf, batch_id=batch_id,
+                            c_TF_all_nominal=c_TF_all_nominal, batch_id=batch_id,
                         )
 
     def append_ordinal_labeled_dose_matrix(
@@ -180,7 +180,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
 
         for r0 in response_rows:
             dose = clean_number(values[r0][dose_col])
-            for input_index, (segments, nominal_ctf) in enumerate(
+            for input_index, (segments, c_TF_all_nominal) in enumerate(
                 zip(segments_by_input, nominal_inputs), start=1
             ):
                 for start_col, end_col, actual_ctf, batch_number in segments:
@@ -189,7 +189,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
                         append_raw(
                             panel, "dose_response", actual_ctf, dose, replicate,
                             values[r0][c0], r0, c0, f"dose_input_{input_index}",
-                            nominal_ctf=nominal_ctf, batch_id=batch_id,
+                            c_TF_all_nominal=c_TF_all_nominal, batch_id=batch_id,
                         )
 
     def append_actual_labeled_dose_matrix(
@@ -241,7 +241,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
         suffix = f"_{batch_kind.lower()}"
         for r0 in response_rows:
             dose = clean_number(values[r0][dose_col])
-            for input_index, (segments, nominal_ctf) in enumerate(
+            for input_index, (segments, c_TF_all_nominal) in enumerate(
                 zip(segments_by_input, nominal_inputs), start=1
             ):
                 for start_col, end_col, actual_ctf, batch_number, occurrence in segments:
@@ -253,7 +253,7 @@ def extract_measurements(values, green_cells, panels=PANELS):
                         append_raw(
                             panel, "dose_response", actual_ctf, dose, replicate,
                             values[r0][c0], r0, c0, f"dose_input_{input_index}{suffix}",
-                            nominal_ctf=nominal_ctf, batch_id=batch_id,
+                            c_TF_all_nominal=c_TF_all_nominal, batch_id=batch_id,
                         )
 
     for panel in panels:
@@ -268,11 +268,11 @@ def extract_measurements(values, green_cells, panels=PANELS):
                 left_first = start + 2
                 ctf_values = [clean_number(values[left_first + j][0]) for j in range(6)]
                 dose_rows = range(start + 2, start + 10)
-                for j, ctf in enumerate(ctf_values):
+                for j, c_TF_all in enumerate(ctf_values):
                     r0 = left_first + j
                     for k in range(6):
-                        append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
-                        append_raw(panel, "input_output_on", ctf, 100.0, k + 1, values[r0][7 + k], r0, 7 + k, "left_on")
+                        append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
+                        append_raw(panel, "input_output_on", c_TF_all, 100.0, k + 1, values[r0][7 + k], r0, 7 + k, "left_on")
                 append_dose_matrix(
                     panel, header_row, dose_rows, 19,
                     [20 + 6 * j for j in range(6)], [6] * 6, ctf_values,
@@ -281,22 +281,22 @@ def extract_measurements(values, green_cells, panels=PANELS):
                 ctf_values = [clean_number(values[start + 2 + j][0]) for j in range(6)]
                 header = values[start + 2]
                 group_width = 6 if all(parse_cell(header[20 + 6 * j])[0] is not None for j in range(6)) else 3
-                for j, ctf in enumerate(ctf_values):
+                for j, c_TF_all in enumerate(ctf_values):
                     r0 = start + 2 + j
                     for k in range(6):
-                        append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
-                        append_raw(panel, "input_output_on", ctf, 1000.0, k + 1, values[r0][13 + k], r0, 13 + k, "left_on")
+                        append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
+                        append_raw(panel, "input_output_on", c_TF_all, 1000.0, k + 1, values[r0][13 + k], r0, 13 + k, "left_on")
                 append_dose_matrix(
                     panel, start + 2, range(start + 3, start + 11), 19,
                     [20 + group_width * j for j in range(6)], [group_width] * 6, ctf_values,
                 )
             else:
                 ctf_values = [clean_number(values[start + 2 + j][0]) for j in range(6)]
-                for j, ctf in enumerate(ctf_values):
+                for j, c_TF_all in enumerate(ctf_values):
                     r0 = start + 2 + j
                     for k in range(6):
-                        append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
-                        append_raw(panel, "input_output_on", ctf, 1000.0, k + 1, values[r0][13 + k], r0, 13 + k, "left_on")
+                        append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
+                        append_raw(panel, "input_output_on", c_TF_all, 1000.0, k + 1, values[r0][13 + k], r0, 13 + k, "left_on")
                 append_ordinal_labeled_dose_matrix(
                     panel, start + 2, range(start + 3, start + 11), 19,
                     [20 + 8 * j for j in range(6)], [8] * 6, ctf_values,
@@ -304,11 +304,11 @@ def extract_measurements(values, green_cells, panels=PANELS):
         elif panel.source_kind == "LBD":
             ctf_values = [clean_number(values[start + 2 + j][0]) for j in range(6)]
             max_dose = clean_number(values[start + 8][13])
-            for j, ctf in enumerate(ctf_values):
+            for j, c_TF_all in enumerate(ctf_values):
                 r0 = start + 2 + j
                 for k in range(6):
-                    append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
-                    append_raw(panel, "input_output_on", ctf, max_dose, k + 1, values[r0][7 + k], r0, 7 + k, "left_on")
+                    append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off")
+                    append_raw(panel, "input_output_on", c_TF_all, max_dose, k + 1, values[r0][7 + k], r0, 7 + k, "left_on")
             if panel.panel_id == "SN9-P5-D":
                 # GR uses two batch-specific actual-input headers per nominal
                 # input, each followed by its second replicate.  Merged nominal
@@ -332,10 +332,10 @@ def extract_measurements(values, green_cells, panels=PANELS):
                 )
         elif panel.source_kind == "BJAMUT_SPECIAL":
             for j, r0 in enumerate(range(275, 281)):
-                ctf = clean_number(values[r0][0])
+                c_TF_all = clean_number(values[r0][0])
                 for k in range(9):
-                    append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off_day")
-                    append_raw(panel, "input_output_on", ctf, 1000.0, k + 1, values[r0][10 + k], r0, 10 + k, "left_on_day")
+                    append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off_day")
+                    append_raw(panel, "input_output_on", c_TF_all, 1000.0, k + 1, values[r0][10 + k], r0, 10 + k, "left_on_day")
             starts = [21, 30, 39, 48, 57, 66]
             nominal_inputs = [clean_number(values[275 + j][0]) for j in range(6)]
             append_actual_labeled_dose_matrix(
@@ -344,10 +344,10 @@ def extract_measurements(values, green_cells, panels=PANELS):
             )
         elif panel.source_kind == "CAR_SPECIAL":
             for j, r0 in enumerate(range(287, 293)):
-                ctf = clean_number(values[r0][0])
+                c_TF_all = clean_number(values[r0][0])
                 for k in range(9):
-                    append_raw(panel, "input_output_off", ctf, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off_run")
-                    append_raw(panel, "input_output_on", ctf, 10.0, k + 1, values[r0][10 + k], r0, 10 + k, "left_on_run")
+                    append_raw(panel, "input_output_off", c_TF_all, 0.0, k + 1, values[r0][1 + k], r0, 1 + k, "left_off_run")
+                    append_raw(panel, "input_output_on", c_TF_all, 10.0, k + 1, values[r0][10 + k], r0, 10 + k, "left_on_run")
             starts = [21, 30, 42, 48, 57, 66]
             widths = [9, 12, 6, 9, 9, 9]
             nominal_inputs = [clean_number(values[287 + j][0]) for j in range(6)]

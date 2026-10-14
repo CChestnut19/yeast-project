@@ -12,22 +12,22 @@ def unit_factor(unit: str) -> float:
         raise ValueError(f"Unsupported inducer unit: {unit!r}") from error
 
 
-def _validate_parameters(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax):
-    for name, value in (("c_tf", c_tf), ("c_i_uM", c_i_uM), ("KA", ka),
-                        ("Kd0", kd0), ("Kb", kb), ("Kd1", kd1), ("T0", t0), ("Tmax", tmax)):
+def _validate_parameters(c_TF_all, c_I, KA, Kd0, Kb, Kd1, T0, Tmax):
+    for name, value in (("c_TF_all", c_TF_all), ("c_I", c_I), ("KA", KA),
+                        ("Kd0", Kd0), ("Kb", Kb), ("Kd1", Kd1), ("T0", T0), ("Tmax", Tmax)):
         array = np.asarray(value, dtype=float)
         if not np.isfinite(array).all() or np.any(array < 0):
             raise ValueError(f"{name} must be finite and non-negative")
-    if np.any(np.asarray(tmax) <= 0) or np.any(np.asarray(t0) >= tmax):
+    if np.any(np.asarray(Tmax) <= 0) or np.any(np.asarray(T0) >= Tmax):
         raise ValueError("Require 0 <= T0 < Tmax")
 
 
-def model_s32_s47(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax=TMAX_PRIMARY):
-    _validate_parameters(c_tf, c_i_uM, ka, kd0, kb, kd1, t0, tmax)
-    dose = np.asarray(c_i_uM, dtype=float)
-    active_pool = cic_dimer_pool(c_tf, dose, kd0, kb, kd1)
-    z = ka * active_pool
-    return t0 + (tmax - t0) * z / (1.0 + z)
+def model_s32_s47(c_TF_all, c_I, KA, Kd0, Kb, Kd1, T0, Tmax=TMAX_PRIMARY):
+    _validate_parameters(c_TF_all, c_I, KA, Kd0, Kb, Kd1, T0, Tmax)
+    dose = np.asarray(c_I, dtype=float)
+    c_TF_eff = cic_dimer_pool(c_TF_all, dose, Kd0, Kb, Kd1)
+    z = KA * c_TF_eff
+    return T0 + (Tmax - T0) * z / (1.0 + z)
 
 
 def _metric_pairs(y, predicted, scale):

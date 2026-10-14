@@ -11,7 +11,7 @@ class Panel:
     dbd: str
     operator: str
     lbd: str
-    inducer: str
+    inducer_name: str
     source_kind: str
     block_row: int
     dose_unit: str

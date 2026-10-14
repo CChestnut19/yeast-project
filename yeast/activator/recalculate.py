@@ -31,7 +31,7 @@ def reconstruct(raw_rows, dbd_params, lbd_params, output_dir: Path, panels=PANEL
             ("Kd0", lp["Kd0"], "dimensionless under manuscript normalization", lp["source_locator"]),
             ("Kb", lp["Kb"], "uM^-1", lp["source_locator"]),
             ("Kd1", lp["Kd1"], "dimensionless", lp["source_locator"]),
-            ("Tmax_primary", TMAX_PRIMARY, "RPU", "Supplementary Note 8.1 paragraphs 402-404"),
+            ("Tmax_primary", TMAX_PRIMARY, "RPU", "Supplementary Note 8.1; calibrated total output ceiling"),
             ("Tmax_sensitivity", TMAX_ALTERNATE, "RPU", "Former continuity value retained as sensitivity"),
         ]:
             parameter_rows.append({
@@ -57,19 +57,19 @@ def reconstruct(raw_rows, dbd_params, lbd_params, output_dir: Path, panels=PANEL
         lp = lbd_params[panel.lbd]
         raw_pred = model_s32_s47(
             np.array([r["input_rpu"] for r in raw]),
-            np.array([r["inducer_concentration_uM"] for r in raw]),
+            np.array([r["c_I"] for r in raw]),
             dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY,
         )
         no_green_groups: dict[tuple[str, float, float], list[dict]] = {}
         for row in raw_no_green:
             no_green_groups.setdefault(
-                (row["batch_id"], row["actual_input_rpu"], row["inducer_concentration_uM"]), []
+                (row["batch_id"], row["c_TF_all"], row["c_I"]), []
             ).append(row)
         no_green_y = []
         no_green_pred = []
-        for (_batch_id, ctf, dose_uM), group in sorted(no_green_groups.items()):
+        for (_batch_id, c_TF_all, dose_uM), group in sorted(no_green_groups.items()):
             no_green_y.append(statistics.fmean(float(r["response_rpu"]) for r in group))
-            no_green_pred.append(float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY)))
+            no_green_pred.append(float(model_s32_s47(c_TF_all, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY)))
         variants = [
             ("primary", "within_batch_conditional_means", "raw", y_cond, np.array([r["prediction_primary_rpu"] for r in cond]), "S32-S47+S11; T0,variant; Tmax=35.85; different batches not averaged"),
             ("batch_conditional_log10", "within_batch_conditional_means", "log10", y_cond, np.array([r["prediction_primary_rpu"] for r in cond]), "Sensitivity only; same conditional means as primary, evaluated after log10 response transformation"),
@@ -105,7 +105,7 @@ def reconstruct(raw_rows, dbd_params, lbd_params, output_dir: Path, panels=PANEL
     unit_rows = []
     for panel in panels:
         panel_doses = sorted({r["inducer_concentration_source"] for r in raw_rows if r["panel_id"] == panel.panel_id and r["plot_type"] == "dose_response"})
-        panel_uM = sorted({r["inducer_concentration_uM"] for r in raw_rows if r["panel_id"] == panel.panel_id and r["plot_type"] == "dose_response"})
+        panel_uM = sorted({r["c_I"] for r in raw_rows if r["panel_id"] == panel.panel_id and r["plot_type"] == "dose_response"})
         unit_rows.append({
             "panel_id": panel.panel_id,
             "construct": panel.construct,
@@ -124,8 +124,8 @@ def reconstruct(raw_rows, dbd_params, lbd_params, output_dir: Path, panels=PANEL
     stats_path = OUT / "01_recalculated_statistics.csv"
     units_path = OUT / "01_concentration_unit_conversion.csv"
     write_csv(raw_path, raw_rows)
-    write_csv(data_path, sorted(plot_rows, key=lambda r: (r["page"], r["panel_order"], r["plot_type"], r["input_rpu"], r["inducer_concentration_uM"])))
-    write_csv(conditional_path, sorted(condition_rows, key=lambda r: (r["page"], r["panel_order"], r["plot_type"], r["input_rpu"], r["inducer_concentration_uM"], r["batch_id"])))
+    write_csv(data_path, sorted(plot_rows, key=lambda r: (r["page"], r["panel_order"], r["plot_type"], r["input_rpu"], r["c_I"])))
+    write_csv(conditional_path, sorted(condition_rows, key=lambda r: (r["page"], r["panel_order"], r["plot_type"], r["input_rpu"], r["c_I"], r["batch_id"])))
     write_csv(plot_input_audit_path, sorted(plot_input_audit_rows, key=lambda r: (int(r["page"]), r["panel_id"], float(r["plot_input_cluster_mean_rpu"]), r["batch_id"])))
     write_csv(param_path, parameter_rows)
     write_csv(stats_path, stats_rows)

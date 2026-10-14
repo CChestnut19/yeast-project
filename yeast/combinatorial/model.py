@@ -18,10 +18,10 @@ FIXED_CTF_ALL = {1: (.49, .21), 2: (8.12, .21), 3: (.49, 4.56), 4: (8.12, 4.56)}
 class Architecture:
     label: str
     activator_lbd: str
-    activator_ka: float
+    KA: float
     repressor_dbd: str
     repressor_lbd: str
-    repressor_kr: float
+    KR: float
 
     @property
     def repressor(self):
@@ -36,32 +36,32 @@ ARCHITECTURES = {
 PANELS = tuple(f'{letter}{condition}' for letter in 'ABC' for condition in range(1, 5))
 
 
-def effective_pool(c_tf, inducer_uM, parameters):
-    dose = np.asarray(inducer_uM, dtype=float)
+def effective_pool(c_TF_all, c_I, parameters):
+    dose = np.asarray(c_I, dtype=float)
     if not np.isfinite(dose).all() or np.any(dose < 0):
         raise ValueError('Inducer concentration must be finite and non-negative')
-    kd0, kb, kd1 = (parameters[name] for name in ('Kd0', 'Kb', 'Kd1'))
-    return cic_dimer_pool(c_tf, dose, kd0, kb, kd1)
+    Kd0, Kb, Kd1 = (parameters[name] for name in ('Kd0', 'Kb', 'Kd1'))
+    return cic_dimer_pool(c_TF_all, dose, Kd0, Kb, Kd1)
 
 
-def predicted_rpu(panel, condition, x_uM, series_uM):
+def predicted_rpu(panel, condition, c_I_x, c_I_series):
     if panel not in PANELS or condition != int(panel[1]) or isinstance(condition, bool):
         raise ValueError(f'Panel and condition must agree: {panel!r}, {condition!r}')
     architecture = ARCHITECTURES[panel[0]]
-    c_activator, c_repressor = FIXED_CTF_ALL[condition]
-    activator_dose, repressor_dose = (x_uM, series_uM) if condition in (1, 2) else (series_uM, x_uM)
-    activator = effective_pool(c_activator, activator_dose, LBD_PARAMETERS[architecture.activator_lbd])
-    repressor = effective_pool(c_repressor, repressor_dose, LBD_PARAMETERS[architecture.repressor_lbd])
-    z = architecture.activator_ka * activator
+    c_TF_all_activator, c_TF_all_repressor = FIXED_CTF_ALL[condition]
+    c_I_activator, c_I_repressor = (c_I_x, c_I_series) if condition in (1, 2) else (c_I_series, c_I_x)
+    activator = effective_pool(c_TF_all_activator, c_I_activator, LBD_PARAMETERS[architecture.activator_lbd])
+    repressor = effective_pool(c_TF_all_repressor, c_I_repressor, LBD_PARAMETERS[architecture.repressor_lbd])
+    z = architecture.KA * activator
     p_activator = z / (1 + z)
-    p_unbound = 1 / (1 + architecture.repressor_kr * repressor)
-    t0 = REPRESSOR_T0_RPU[architecture.repressor]
-    result = t0 + (TMAX_RPU - t0) * p_activator * p_unbound**REPRESSOR_OPERATOR_COUNT
+    p_unbound = 1 / (1 + architecture.KR * repressor)
+    T0 = REPRESSOR_T0_RPU[architecture.repressor]
+    result = T0 + (TMAX_RPU - T0) * p_activator * p_unbound**REPRESSOR_OPERATOR_COUNT
     return float(result) if np.ndim(result) == 0 else result
 
 
 def model_settings():
     return {'Tmax': TMAX_RPU, 'T0': REPRESSOR_T0_RPU, 'operators': REPRESSOR_OPERATOR_COUNT,
-            'lbds': LBD_PARAMETERS, 'tf_inputs': {str(k): list(v) for k, v in FIXED_CTF_ALL.items()},
+            'lbds': LBD_PARAMETERS, 'c_TF_all': {str(k): list(v) for k, v in FIXED_CTF_ALL.items()},
             'architectures': {key: asdict(value) for key, value in ARCHITECTURES.items()},
             'operator_rule': 'p_activator * p_unbound**n'}

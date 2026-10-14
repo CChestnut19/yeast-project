@@ -10,7 +10,7 @@ from .model import model_s32_s47, unit_factor
 
 def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
     # R2 observation unit: a conditional mean within one experimental batch at
-    # exactly the same measured TF input and inducer concentration. Batch is a
+    # exactly the same measured TF input and c_I concentration. Batch is a
     # mandatory part of the key, so separate batches are never averaged for R2.
     condition_groups: dict[tuple, list[dict]] = {}
     for row in raw_rows:
@@ -18,24 +18,24 @@ def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
             continue
         key = (
             row["panel_id"], row["plot_type"], row["batch_id"],
-            row["actual_input_rpu"], row["nominal_input_rpu"],
+            row["c_TF_all"], row["nominal_input_rpu"],
             row["inducer_concentration_source"], row["inducer_source_unit"],
-            row["inducer_concentration_uM"],
+            row["c_I"],
         )
         condition_groups.setdefault(key, []).append(row)
 
     condition_rows: list[dict] = []
     panel_by_id = {p.panel_id: p for p in panels}
     for key, group in condition_groups.items():
-        panel_id, plot_type, batch_id, ctf, nominal_ctf, dose_source, source_unit, dose_uM = key
+        panel_id, plot_type, batch_id, c_TF_all, c_TF_all_nominal, dose_source, source_unit, dose_uM = key
         panel = panel_by_id[panel_id]
         responses = [float(row["response_rpu"]) for row in group]
         sd = statistics.stdev(responses) if len(responses) > 1 else float("nan")
         dp = dbd_parameters_for_panel(panel, dbd_params)
         lp = lbd_params[panel.lbd]
-        prediction = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY))
-        prediction_tmax35 = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_ALTERNATE))
-        prediction_global_t0 = float(model_s32_s47(ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], GLOBAL_T0_SENSITIVITY, TMAX_PRIMARY))
+        prediction = float(model_s32_s47(c_TF_all, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_PRIMARY))
+        prediction_tmax35 = float(model_s32_s47(c_TF_all, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], dp["T0_variant"], TMAX_ALTERNATE))
+        prediction_global_t0 = float(model_s32_s47(c_TF_all, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"], GLOBAL_T0_SENSITIVITY, TMAX_PRIMARY))
         condition_rows.append({
             "panel_id": panel_id,
             "page": panel.page,
@@ -44,16 +44,16 @@ def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "dbd": panel.dbd,
             "operator": panel.operator,
             "lbd": panel.lbd,
-            "inducer": panel.inducer,
+            "inducer_name": panel.inducer_name,
             "plot_type": plot_type,
-            "input_rpu": ctf,
-            "actual_input_rpu": ctf,
-            "nominal_input_rpu": nominal_ctf,
+            "input_rpu": c_TF_all,
+            "c_TF_all": c_TF_all,
+            "nominal_input_rpu": c_TF_all_nominal,
             "batch_id": batch_id,
             "inducer_concentration_source": dose_source,
             "inducer_source_unit": source_unit,
             "inducer_to_uM_factor": unit_factor(source_unit),
-            "inducer_concentration_uM": dose_uM,
+            "c_I": dose_uM,
             "n_included": len(responses),
             "mean_response_rpu": statistics.fmean(responses),
             "sd_response_rpu": sd,
@@ -61,14 +61,14 @@ def conditional_means(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "KA": dp["KA"],
             "T0_variant": dp["T0_variant"],
             "Kd0": lp["Kd0"],
-            "Kb_per_uM": lp["Kb"],
+            "Kb": lp["Kb"],
             "Kd1": lp["Kd1"],
             "Tmax_primary": TMAX_PRIMARY,
             "prediction_primary_rpu": prediction,
             "prediction_Tmax35_rpu": prediction_tmax35,
             "prediction_global_T0_0_035_rpu": prediction_global_t0,
             "source_cells": ";".join(row["source_cell"] for row in group),
-            "aggregation_rule": "within-batch arithmetic conditional mean of non-starred replicates at identical actual TF input and inducer; batches never pooled",
+            "aggregation_rule": "within-batch arithmetic conditional mean of non-starred replicates at identical actual TF input and c_I; batches never pooled",
         })
 
 
@@ -88,7 +88,7 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
             continue
         dose_batches_by_panel.setdefault(row["panel_id"], {})[row["batch_id"]] = {
             "batch_id": row["batch_id"],
-            "actual_input_rpu": float(row["actual_input_rpu"]),
+            "c_TF_all": float(row["c_TF_all"]),
             "nominal_input_rpu": float(row["nominal_input_rpu"]),
         }
 
@@ -98,11 +98,11 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
         batch_records = list(dose_batches_by_panel.get(panel.panel_id, {}).values())
         zero_records = [
             row for row in batch_records
-            if row["nominal_input_rpu"] == 0 or row["actual_input_rpu"] <= 0
+            if row["nominal_input_rpu"] == 0 or row["c_TF_all"] <= 0
         ]
         positive_records = sorted(
             [row for row in batch_records if row not in zero_records],
-            key=lambda row: row["actual_input_rpu"],
+            key=lambda row: row["c_TF_all"],
         )
         clusters: list[list[dict]] = []
         if zero_records:
@@ -112,9 +112,9 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
                 clusters.append([record])
                 continue
             candidate = clusters[-1] + [record]
-            center = statistics.fmean(item["actual_input_rpu"] for item in candidate)
+            center = statistics.fmean(item["c_TF_all"] for item in candidate)
             maximum_deviation = max(
-                abs(item["actual_input_rpu"] - center) / center for item in candidate
+                abs(item["c_TF_all"] - center) / center for item in candidate
             )
             if maximum_deviation <= PLOT_INPUT_RELATIVE_TOLERANCE + 1e-12:
                 clusters[-1].append(record)
@@ -124,10 +124,10 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
         for cluster_number, cluster in enumerate(clusters, start=1):
             is_zero_cluster = any(item in zero_records for item in cluster)
             center = 0.0 if is_zero_cluster else statistics.fmean(
-                item["actual_input_rpu"] for item in cluster
+                item["c_TF_all"] for item in cluster
             )
             maximum_deviation = 0.0 if is_zero_cluster else max(
-                abs(item["actual_input_rpu"] - center) / center for item in cluster
+                abs(item["c_TF_all"] - center) / center for item in cluster
             )
             cluster_id = f"plot_input_cluster_{cluster_number}"
             for item in cluster:
@@ -145,11 +145,11 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
                     "plot_type": "dose_response",
                     "batch_id": item["batch_id"],
                     "source_nominal_input_rpu": item["nominal_input_rpu"],
-                    "actual_input_rpu": item["actual_input_rpu"],
+                    "c_TF_all": item["c_TF_all"],
                     "plot_input_cluster_id": cluster_id,
                     "plot_input_cluster_mean_rpu": center,
                     "batch_relative_deviation_from_cluster_mean": (
-                        0.0 if is_zero_cluster else abs(item["actual_input_rpu"] - center) / center
+                        0.0 if is_zero_cluster else abs(item["c_TF_all"] - center) / center
                     ),
                     "cluster_max_relative_deviation": maximum_deviation,
                     "tolerance": PLOT_INPUT_RELATIVE_TOLERANCE,
@@ -167,30 +167,30 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
             plot_input = cluster["plot_input_rpu"]
             cluster_id = cluster["cluster_id"]
         else:
-            plot_input = float(row["actual_input_rpu"])
+            plot_input = float(row["c_TF_all"])
             cluster_id = row["batch_id"]
         key = (
             row["panel_id"], row["plot_type"], cluster_id, plot_input,
             row["inducer_concentration_source"], row["inducer_source_unit"],
-            row["inducer_concentration_uM"],
+            row["c_I"],
         )
         plot_groups.setdefault(key, []).append(row)
 
     plot_rows: list[dict] = []
     for key, group in plot_groups.items():
-        panel_id, plot_type, cluster_id, plot_ctf, dose_source, source_unit, dose_uM = key
+        panel_id, plot_type, cluster_id, c_TF_all_display, dose_source, source_unit, dose_uM = key
         panel = panel_by_id[panel_id]
         responses = [float(row["response_rpu"]) for row in group]
         sd = statistics.stdev(responses) if len(responses) > 1 else float("nan")
         batch_inputs = {
-            (row["batch_id"], float(row["actual_input_rpu"]))
+            (row["batch_id"], float(row["c_TF_all"]))
             for row in group
         }
         actual_inputs = [actual for _, actual in sorted(batch_inputs)]
         dp = dbd_parameters_for_panel(panel, dbd_params)
         lp = lbd_params[panel.lbd]
         prediction = float(model_s32_s47(
-            plot_ctf, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"],
+            c_TF_all_display, dose_uM, dp["KA"], lp["Kd0"], lp["Kb"], lp["Kd1"],
             dp["T0_variant"], TMAX_PRIMARY,
         ))
         plot_rows.append({
@@ -201,11 +201,11 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "dbd": panel.dbd,
             "operator": panel.operator,
             "lbd": panel.lbd,
-            "inducer": panel.inducer,
+            "inducer_name": panel.inducer_name,
             "plot_type": plot_type,
-            "input_rpu": plot_ctf,
+            "input_rpu": c_TF_all_display,
             "plot_input_cluster_id": cluster_id,
-            "plot_input_cluster_mean_rpu": plot_ctf,
+            "plot_input_cluster_mean_rpu": c_TF_all_display,
             "source_nominal_inputs_rpu": ";".join(
                 f"{value:.12g}" for value in sorted({float(row["nominal_input_rpu"]) for row in group})
             ),
@@ -218,7 +218,7 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "inducer_concentration_source": dose_source,
             "inducer_source_unit": source_unit,
             "inducer_to_uM_factor": unit_factor(source_unit),
-            "inducer_concentration_uM": dose_uM,
+            "c_I": dose_uM,
             "n_included": len(responses),
             "mean_response_rpu": statistics.fmean(responses),
             "sd_response_rpu": sd,
@@ -226,11 +226,11 @@ def plot_summaries(raw_rows, dbd_params, lbd_params, panels=PANELS):
             "KA": dp["KA"],
             "T0_variant": dp["T0_variant"],
             "Kd0": lp["Kd0"],
-            "Kb_per_uM": lp["Kb"],
+            "Kb": lp["Kb"],
             "Kd1": lp["Kd1"],
             "Tmax_primary": TMAX_PRIMARY,
             "prediction_primary_rpu": prediction,
-            "aggregation_rule": "plot mean +/- sample SD after pooling non-starred outputs at identical inducer across measured TF-input batches whose inputs are all within 30% of the cluster arithmetic mean; source-zero batches pooled as zero",
+            "aggregation_rule": "plot mean +/- sample SD after pooling non-starred outputs at identical c_I across measured TF-input batches whose inputs are all within 30% of the cluster arithmetic mean; source-zero batches pooled as zero",
         })
 
 

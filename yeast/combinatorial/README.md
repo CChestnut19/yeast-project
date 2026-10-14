@@ -17,7 +17,7 @@ Use the [fixed environment](../../submission/REPRODUCIBILITY.md), or install Num
 - Activator TF inputs: 0.49 / 8.12; repressor TF inputs: 0.21 / 4.56.
 - `Tmax=35.85`, repressor `T0=0.01`, two repressor operators.
 - Output weight: `p_activator*p_unbound^2`; original parameter precision remains distinct from Note 10.
-- Conditions 1/2 vary activator inducer; 3/4 vary repressor inducer.
+- Conditions 1/2 vary activator c_I; 3/4 vary repressor c_I.
 - Each panel uses experimental means to calculate log10 R². A2 remains `-1.073005331220207`.
 
 Equations are in `model.py`, input validation in `data.py`, and numerical execution in `pipeline.py`. The retained CSV filename reflects the supplied archive's naming; no drawing is performed. Supplied means have not been independently reconciled with the original workbook.

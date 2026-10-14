@@ -5,29 +5,36 @@
 The yeast modules use `yeast.binding.cic_dimer_pool`. Ordinary and nuclear CIC calculations use the same mass balance:
 
 ```text
-b = 1 + kx1 + k2*I*(1+kx2)
-d = k1*(1+kx1²) + k2²*k3*I²*(1+kx2²)
-m = 2*L / (b + sqrt(b² + 8*d*L))
-active_pool = d*m²
-z = kd*active_pool
+b = 1 + Kx1 + Kb*c_I*(1+Kx2)
+d = Kd0*(1+Kx1²) + Kb²*Kd1*c_I²*(1+Kx2²)
+c_TF = 2*c_TF_all / (b + sqrt(b² + 8*d*c_TF_all))
+c_TF_eff = d*c_TF²
+z = KA*c_TF_eff
 p_bound = z/(1+z)
 p_unbound = 1/(1+z)
 ```
 
-Set `kx1=kx2=0` for the ordinary model. The rationalized root avoids cancellation and gives exactly zero active pool at zero TF. The mammalian NumPy and differentiable Torch implementations use the same ordinary mass balance, verified by cross-backend numerical tests.
+Set `Kx1=Kx2=0` for the ordinary model. The rationalized root avoids cancellation and gives exactly zero active pool at zero TF. The mammalian NumPy and differentiable Torch implementations use the same ordinary mass balance, verified by cross-backend numerical tests.
 
 | Numerical API name | Manuscript/module name | Meaning |
 | --- | --- | --- |
-| `L` | `c_tf`, `ctf_all` | Total TF concentration |
-| `I` | `c_i_uM`, `inducer` | Inducer concentration in the selected parameter units |
-| `kd` | `KA` | Operator association coefficient |
-| `k1` | `Kd0` | Basal dimerization coefficient |
-| `k2` | `Kb` | Inducer association coefficient |
-| `k3` | `Kd1` | Inducer-dependent dimerization coefficient |
-| `I0` | `T0` | Baseline response |
-| `Imax` | `Tmax-T0` | Response amplitude, not total ceiling |
+| `c_TF_all` | c_TF,all | Total TF concentration in calibrated RPU |
+| `c_I` | c_I | Inducer concentration in µM |
+| `KA` | `KA` | Operator association coefficient |
+| `Kd0` | `Kd0` | Basal dimerization coefficient |
+| `Kb` | `Kb` | Inducer association coefficient |
+| `Kd1` | `Kd1` | Inducer-dependent dimerization coefficient |
+| `T0` | `T0` | Baseline response |
+| `Tmax_minus_T0` | `Tmax-T0` | Response amplitude |
 
-`analysis.response` retains explicit amplitude arguments. Therefore, to reproduce `activator.model_s32_s47(..., t0, tmax)`, supply `I0=t0` and `Imax=tmax-t0`. Do not pass the total ceiling as an amplitude. Concentration units are not inferred or automatically converted by array APIs; the activator workbook workflow retains its explicit source-unit conversion.
+`analysis.response` uses the explicit amplitude `Tmax_minus_T0`. To reproduce
+`activator.model_s32_s47(..., T0, Tmax)`, supply that same `T0` and
+`Tmax_minus_T0=Tmax-T0`. Array APIs use the supplied parameter units; the
+activator workbook workflow converts its source doses to µM explicitly.
+See [SI variable names](SI_VARIABLE_NAMES.md) for keyword and export changes.
+
+`Kx1/Kx2` retain the historical nuclear-transport model. They are not aliases
+for the newer apparent-model parameters `Λ(I)` or `n_app`.
 
 Different operator architectures retain their established output rules:
 
@@ -38,7 +45,7 @@ Different operator architectures retain their established output rules:
 | Note 11 combined model | `T0 + (Tmax-T0)*p_bound_activator*p_unbound_repressor**2` |
 | Mammalian CIC | `T0 + (13.61-T0)*(1-(1-p_bound)**7)` |
 
-The generic `hybrid_promoter` now uses the Note 11 rule with a total `tmax`, one baseline and an explicit operator count (default 2). Heterodimer, monomer and allosteric comparison functions describe different model assumptions; they are not alternative CIC fitting equations.
+The generic `hybrid_promoter` now uses the Note 11 rule with a total `Tmax`, one T0 and an explicit operator count (default 2). Heterodimer, monomer and allosteric comparison functions describe different model assumptions; they are not alternative CIC fitting equations.
 
 ## One fitting objective: log10 R²
 
@@ -68,7 +75,7 @@ Observed responses must be finite, strictly positive and nonconstant within ever
 
 - `yeast.fitting.fit_response`: SciPy least-squares fitting; optional `groups` identifies equal-weight datasets.
 - `fit_notebook_curve_fit`: SciPy curve_fit with source-cell initialization/bounds and the same normalized log10 objective. Historical raw losses and invalid-domain fallback are superseded.
-- `fit_shared_then_kd` / `fit_shared_then_kd_adam`: fit shared receptor parameters across groups, then each dataset's kd. SciPy and optional Torch use the canonical response and log10 objective.
+- `fit_shared_then_KA` / `fit_shared_then_KA_adam`: fit shared receptor parameters across groups, then each dataset's KA. SciPy and optional Torch use the canonical response and log10 objective.
 - Mammalian `model_core.fit_scipy` / `fit_pytorch`: equal-weight per-CSV log10 R² objective and the established shared-parameter hierarchy.
 - Mammalian `fit_sensor_logr2_floor.py`: the same macro log10 objective, subject to the existing requirement that every included sensor reaches `R2_log10 >= 0.5`. Adaptive weights help reach feasibility; final feasible candidates are ranked by macro log10 R². Reported feasibility is checked independently.
 
@@ -78,10 +85,10 @@ The fixed-parameter activator/repressor/combinatorial reconstruction commands do
 
 The earlier `037e500` revision preserved some inconsistent historical expressions. This revision corrects the same-model calculations:
 
-- Both crosstalk curves use the supplied TF concentration; kd is never substituted for TF.
+- Both crosstalk curves use the supplied TF concentration; KA is never substituted for TF.
 - Fold ranges use the complete shared induced/basal response, including the correct nuclear terms.
-- Nuclear coefficient diagnostics use `(1+kx2²)/(1+kx1²)`. They report the inducer-dependent contribution relative to the basal contribution, not the full response fold change.
-- Basal kd and induced `M=k2²*k3` estimation use exact mass-balance inverses with the necessary fixed k1/k2 inputs. Grouped estimates are initial summaries, not objective-optimized fits.
+- Nuclear coefficient diagnostics use `(1+Kx2²)/(1+Kx1²)`. They report the inducer-dependent contribution relative to the basal contribution, not the full response fold change.
+- Basal KA and induced `Kb2_Kd1=Kb²*Kd1` estimation use exact mass-balance inverses with the necessary fixed Kd0/Kb inputs. Grouped estimates are initial summaries, not objective-optimized fits.
 - The asymmetric epsilon/clamped fitting variants, fixed-TF root helper, disconnected quadratic scratch expression and incompatible literal S83 response are removed. Their source remains in Git history.
 
 The notebook parameter JSON preserves original source constants and hashes as provenance. Any `historical_fit` entries describe the source and do not configure the current optimizers. Original experimental inputs remain incomplete; these changes require fresh fitting when those inputs become available. Old fitted parameters are not silently relabeled as log10-optimal.

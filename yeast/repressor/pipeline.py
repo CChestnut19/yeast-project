@@ -7,6 +7,8 @@ from .model import SENSORS, predict, model_settings
 DEFAULT_DATA = Path(__file__).resolve().parent / 'data/experiment_data.csv'
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / 'Output/repressor'
 COLUMNS = ('sensor', 'tf_input_rpu', 'inducer_um', 'replicate', 'experiment_rpu')
+# Original CSV headers are provenance; numerical records use SI names.
+SI_COLUMNS = {'tf_input_rpu': 'c_TF_all', 'inducer_um': 'c_I'}
 
 
 def read_data(path):
@@ -17,9 +19,9 @@ def read_data(path):
             raise ValueError(f'CSV row {index}: unknown sensor {sensor!r}')
         row = {'sensor': sensor}
         for column in COLUMNS[1:]:
-            row[column] = number(source[column], f'CSV row {index}, {column}',
+            row[SI_COLUMNS.get(column, column)] = number(source[column], f'CSV row {index}, {column}',
                                  positive=column in ('replicate', 'experiment_rpu'), integer=column == 'replicate')
-        key = tuple(row[column] for column in COLUMNS[:-1])
+        key = tuple(row[SI_COLUMNS.get(column, column)] for column in COLUMNS[:-1])
         if key in keys:
             raise ValueError(f'CSV row {index}: duplicate sensor/input/dose/replicate')
         keys.add(key)
@@ -30,7 +32,7 @@ def read_data(path):
 
 
 def calculate_predictions(rows):
-    return [{**row, 'prediction_rpu': predict(row['sensor'], row['tf_input_rpu'], row['inducer_um'])} for row in rows]
+    return [{**row, 'prediction_rpu': predict(row['sensor'], row['c_TF_all'], row['c_I'])} for row in rows]
 
 
 def summarize(rows):

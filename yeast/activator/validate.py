@@ -42,22 +42,22 @@ def log10_r2(observed, predicted):
 
 def independent_prediction(row):
     """Scalar mass balance evaluated separately from the NumPy model."""
-    tf, dose = float(row["actual_input_rpu"]), float(row["inducer_concentration_uM"])
-    ka, kd0, kb, kd1, t0 = (float(row[k]) for k in ("KA", "Kd0", "Kb_per_uM", "Kd1", "T0_variant"))
+    c_TF_all, c_I = float(row["c_TF_all"]), float(row["c_I"])
+    KA, Kd0, Kb, Kd1, T0 = (float(row[k]) for k in ("KA", "Kd0", "Kb", "Kd1", "T0_variant"))
     ceiling = float(row["Tmax_primary"])
-    require(all(math.isfinite(x) for x in (tf, dose, ka, kd0, kb, kd1, t0, ceiling)), "Non-finite model input")
-    require(tf >= 0 and dose >= 0 and min(ka, kd0, kb, kd1) > 0 and 0 <= t0 < ceiling,
+    require(all(math.isfinite(x) for x in (c_TF_all, c_I, KA, Kd0, Kb, Kd1, T0, ceiling)), "Non-finite model input")
+    require(c_TF_all >= 0 and c_I >= 0 and min(KA, Kd0, Kb, Kd1) > 0 and 0 <= T0 < ceiling,
             "Invalid model input domain")
-    a, b = kd0 + kd1 * (kb * dose)**2, 1 + kb * dose
-    free_tf = 2 * tf / (b + math.sqrt(b*b + 8*a*tf))
-    z = ka * a * free_tf**2
-    return t0 + (ceiling - t0) * z / (1 + z)
+    a, b = Kd0 + Kd1 * (Kb * c_I)**2, 1 + Kb * c_I
+    c_TF = 2 * c_TF_all / (b + math.sqrt(b*b + 8*a*c_TF_all))
+    z = KA * a * c_TF**2
+    return T0 + (ceiling - T0) * z / (1 + z)
 
 
 def _condition_key(row):
-    return (row["panel_id"], row["batch_id"], float(row["actual_input_rpu"]),
+    return (row["panel_id"], row["batch_id"], float(row["c_TF_all"]),
             float(row["nominal_input_rpu"]), float(row["inducer_concentration_source"]),
-            row["inducer_source_unit"], float(row["inducer_concentration_uM"]))
+            row["inducer_source_unit"], float(row["c_I"]))
 
 
 def verify_manifest(output_dir):
@@ -125,7 +125,7 @@ def validate(output_dir, previous_root=None, panels=PANELS):
         require(starred == as_bool(row["starred_in_workbook"]), "Saved star flag differs from source cell")
         require(as_bool(row["included_primary"]) == (not starred), "Primary inclusion differs from the trailing-star rule")
         require(same_number(float(row["inducer_concentration_source"]) * unit_factor(row["inducer_source_unit"]),
-                            float(row["inducer_concentration_uM"])), "Inducer unit conversion mismatch")
+                            float(row["c_I"])), "Inducer unit conversion mismatch")
         if not starred:
             groups[_condition_key(row)].append(float(row["response_rpu"]))
     conditional_keys = set()
@@ -138,7 +138,7 @@ def validate(output_dir, previous_root=None, panels=PANELS):
         require(int(row["n_included"]) == len(values) and same_number(float(row["mean_response_rpu"]), statistics.fmean(values))
                 and same_number(float(row["sd_response_rpu"]), sd), f"Conditional mean/SD mismatch: {key}")
         for field, parameter in (("KA", "KA"), ("T0_variant", "T0_variant"), ("Kd0", "Kd0"),
-                                 ("Kb_per_uM", "Kb"), ("Kd1", "Kd1"), ("Tmax_primary", "Tmax_primary")):
+                                 ("Kb", "Kb"), ("Kd1", "Kd1"), ("Tmax_primary", "Tmax_primary")):
             require(same_number(float(row[field]), parameter_lookup[(row["panel_id"], parameter)]),
                     f"Conditional parameter mismatch: {row['panel_id']} {field}")
         require(same_number(float(row["Tmax_primary"]), TMAX_PRIMARY), "Total activator Tmax has changed")

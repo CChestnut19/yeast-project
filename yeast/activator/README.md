@@ -14,10 +14,10 @@ python -m yeast.activator --help
 ## Required inputs
 
 1. The author-supplied workbook is included at `data/Source data.xlsx`; see the [source manifest](../../data/README.md). Its `SI-note activator` worksheet covers `A1:BW296`; row and column positions map to the 27 panels in `panels.py`.
-2. `Supplementary_information_tables.tsv`, extracted from the supplementary tables, with tab-separated columns `table_index,row_index,column_index,text`. Indices follow the original scripts: Table 1 contains DBD/operator/KA/T0 values, and Table 2 contains LBD/Kd0/Kb/Kd1 values.
+2. `Supplementary_information_tables.tsv`, extracted from the supplementary tables, with tab-separated columns `table_index,row_index,column_index,text`. The zero-based physical table indices follow the original scripts: index 1 contains DBD/operator/KA/T0 values (Supplementary Table 2), and index 2 contains LBD/Kd0/Kb/Kd1 values (Supplementary Table 3).
 3. Optionally, the original `source_sheet_dump.json`, passed with `--source-dump`. When supplied, the reader cross-checks the worksheet name, A1 origin, cell values and available workbook hashes.
 
-The original script archive contained none of these experimental inputs. The author subsequently supplied the source workbook on 2026-10-13; the original parameter TSV remains missing. `tests/activator_fixture.py` generates synthetic test data only; those fixtures cannot substitute for experimental observations.
+The original script archive contained none of these experimental inputs. The author subsequently supplied the source workbook on 2026-10-13; the original parameter TSV remains missing. Historical synthetic fixtures, available in Git history, cannot substitute for experimental observations.
 
 The reader uses cached OOXML cell values, preserves textual asterisks and RGB `A9D18E` green fills, and does not calculate Excel formulas. Formulas without cached values and Excel error cells cause an error; calculate and save the original workbook before running this workflow. Recorded formula information retains the original OOXML content. The reader neither expands nor recalculates shared formulas.
 
@@ -57,7 +57,7 @@ previous_audit/
 - The main model combines the S32-S47 mass-balance equations with S11. `Tmax=35.85` is the total output ceiling, and `T0_variant` comes from the supplementary table.
 - The `KA=0.74` override for LexAec87 comes from the original archive. Its `T0_variant` remains the table value.
 - Measurements with a trailing `*` are excluded first. Values marked only by green fill remain in the main analysis; a separate sensitivity analysis excludes them.
-- Each R² observation is the arithmetic mean of unstarred replicates sharing the same panel, batch/Run/Day, actual TF input and inducer concentration. Different batches are not pooled when calculating R².
+- Each R² observation is the arithmetic mean of unstarred replicates sharing the same panel, batch/Run/Day, actual TF input and inducer concentration `c_I`. Different batches are not pooled when calculating R².
 - Plot summaries separately group batches with similar actual TF inputs. Each nonzero member must be within 30% of the group mean. This grouping does not change the observation unit used for R².
 - The original primary metric is **raw-scale R²**. `batch_conditional_log10` separately reports **log10 R²**. Both use `1-SSE/SST`; Pearson r² is a diagnostic only.
 - Sensitivity analyses retain `Tmax=35`, a uniform `T0=0.035`, exclusion of green values and individual-replicate analysis. The inconsistent literal S83 alternative was removed; all response calculations use the S32-S47 mass balance and S11 output equation. Log10 diagnostics record omitted nonpositive or nonfinite values; parameter fitting separately rejects such inputs.

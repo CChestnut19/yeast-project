@@ -36,17 +36,17 @@ def read_manuscript_parameters(table_tsv: Path) -> tuple[dict[str, dict], dict[s
         if dbd:
             current_dbd = dbd
         operator = cells.get((1, r, 1), "").strip()
-        ka_text = cells.get((1, r, 3), "").strip()
-        t0_text = cells.get((1, r, 4), "").strip()
-        if operator and ka_text:
+        KA_text = cells.get((1, r, 3), "").strip()
+        T0_text = cells.get((1, r, 4), "").strip()
+        if operator and KA_text:
             if normalized_operator(operator) in dbd_by_operator:
                 raise ValueError(f"Duplicate manuscript operator: {operator}")
             dbd_by_operator[normalized_operator(operator)] = {
                 "dbd_table_name": current_dbd,
                 "operator": operator,
-                "KA": parse_scientific(ka_text),
-                "T0_variant": parse_scientific(t0_text) if t0_text else None,
-                "source_locator": f"Supplementary information.docx; Supplementary Table 1; row {r + 1}",
+                "KA": parse_scientific(KA_text),
+                "T0_variant": parse_scientific(T0_text) if T0_text else None,
+                "source_locator": f"Supplementary information.docx; Supplementary Table 2; row {r + 1}",
             }
 
     lbd_by_name: dict[str, dict] = {}
@@ -62,7 +62,7 @@ def read_manuscript_parameters(table_tsv: Path) -> tuple[dict[str, dict], dict[s
             "Kd0": parse_scientific(cells[(2, r, 2)]),
             "Kb": parse_scientific(cells[(2, r, 3)]),
             "Kd1": parse_scientific(cells[(2, r, 4)]),
-            "source_locator": f"Supplementary information.docx; Supplementary Table 2; row {r + 1}",
+            "source_locator": f"Supplementary information.docx; Supplementary Table 3; row {r + 1}",
         }
     for row in dbd_by_operator.values():
         if not math.isfinite(row["KA"]) or row["KA"] <= 0:
@@ -78,7 +78,7 @@ def read_manuscript_parameters(table_tsv: Path) -> tuple[dict[str, dict], dict[s
 def dbd_parameters_for_panel(panel: Panel, dbd_params: dict[str, dict]) -> dict:
     """Return the panel's DBD parameters with declared panel-level overrides.
 
-    LexAec87 retains the lexOrec.sym T0,variant from Supplementary Table 1,
+    LexAec87 retains the lexOrec.sym T0,variant from Supplementary Table 2,
     while KA is fixed to 0.74 for every Supplementary Note 9 LexAec87 sensor
     as recorded in the supplied archive; retained as a reproducibility default.
     """

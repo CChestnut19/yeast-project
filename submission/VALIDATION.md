@@ -1,6 +1,30 @@
 # Algorithm-only validation
 
-Validation date: **2026-09-18**, draft `0.2.1-draft.1`. These results concern the canonical-formula and log10-R² revision. Previous raw/mixed-objective and historical-literal checks do not describe the current fitting behavior.
+## SI naming migration 2026-10-14
+
+The current suite contains 18 SI naming and numerical checks: 17 passed and
+one optional Torch check was skipped in the Python 3.12.14 environment;
+all 18 passed in the existing Python 3.9.15/Torch 1.13 environment.
+The new tests exercise SI keyword dictionaries, exact inversions, total
+ceiling versus amplitude, activator/repressor binding names, original-CSV
+normalization, historical parameter adaptation (including distinct hybrid
+and comparison-model roles), and SciPy/Torch shared fits.
+
+All 1,141 Note 10 and 216 Note 11 predictions and metrics exactly matched
+the pre-migration results. Ordinary/nuclear/activator calculations at 151
+inputs, three historical design scans and a parameter-fit result also had
+zero numerical difference. Source workbook, archived CSVs and historical
+parameter JSON retained identical SHA-256 hashes. The demo passed using
+the archived metrics now stored in `submission/reference_metrics.json`.
+This verifies the naming migration, not complete SI/model/experiment agreement.
+
+## Historical validation 2026-09-18
+
+The results below record the earlier canonical-formula and log10-R² revision
+of draft `0.2.1-draft.1`. They are historical results of the former 102-test
+suite, which is absent from baseline `94dd2c0`; they are not the current test count.
+Previous raw/mixed-objective and historical-literal checks do not describe
+the current fitting behavior.
 
 ## Environment and commands
 

@@ -1,6 +1,7 @@
 """Canonical yeast inversions and log10 R-squared parameter fitting.
 
-Imax is an amplitude: the total ceiling is I0 + Imax. All optimizers minimize
+Tmax_minus_T0 is the response amplitude; the total ceiling is T0 + Tmax_minus_T0.
+All optimizers minimize
 an equal-dataset mean of 1 - R2(log10 response). Notebook values are provenance.
 """
 import numpy as np
@@ -10,61 +11,61 @@ from .analysis import response
 from .binding import active_dimer_pool
 
 
-def _fraction(baseline, output, amplitude):
-    baseline, output, amplitude = np.broadcast_arrays(
-        np.asarray(baseline, float), np.asarray(output, float), np.asarray(amplitude, float))
-    if (not all(np.isfinite(v).all() for v in (baseline, output, amplitude))
-            or np.any(baseline < 0) or np.any(amplitude <= 0)):
-        raise ValueError('Require finite nonnegative baseline and positive amplitude')
-    fraction = (output-baseline)/amplitude
+def _fraction(T0, output, Tmax_minus_T0):
+    T0, output, Tmax_minus_T0 = np.broadcast_arrays(
+        np.asarray(T0, float), np.asarray(output, float), np.asarray(Tmax_minus_T0, float))
+    if (not all(np.isfinite(v).all() for v in (T0, output, Tmax_minus_T0))
+            or np.any(T0 < 0) or np.any(Tmax_minus_T0 <= 0)):
+        raise ValueError('Require finite nonnegative T0 and positive Tmax_minus_T0')
+    fraction = (output-T0)/Tmax_minus_T0
     if np.any((fraction < 0) | (fraction >= 1)):
-        raise ValueError('Output must lie between baseline and the unsaturated ceiling')
+        raise ValueError('Output must lie between T0 and the unsaturated ceiling')
     return fraction
 
 
-def estimate_kd(baseline, basal_output, k1, *, amplitude=2.5, total_tf=1.0):
-    """Exactly invert basal occupancy for known k1 and no nuclear partitioning."""
-    fraction = _fraction(baseline, basal_output, amplitude)
-    pool = active_dimer_pool(total_tf, 1., k1)
+def estimate_KA(T0, basal_output, Kd0, *, Tmax_minus_T0=2.5, c_TF_all=1.0):
+    """Exactly invert basal occupancy for known Kd0 and no nuclear partitioning."""
+    fraction = _fraction(T0, basal_output, Tmax_minus_T0)
+    pool = active_dimer_pool(c_TF_all, 1., Kd0)
     if np.any(pool <= 0):
         raise ValueError('Require a positive basal dimer pool')
     return fraction/(pool*(1-fraction))
 
 
-def estimate_M(baseline, maximum_output, kd, inducer, *, k1, k2,
-               amplitude=2.5, total_tf=1.0):
-    """Invert the full mass balance for M = k2**2 * k3, without nuclear terms.
+def estimate_Kb2_Kd1(T0, maximum_output, KA, c_I, *, Kd0, Kb,
+               Tmax_minus_T0=2.5, c_TF_all=1.0):
+    """Invert the full mass balance for Kb2_Kd1 = Kb**2 * Kd1, without nuclear terms.
 
-    Known k1 and k2 are required. The inferred pool must be below L/2 and
-    the resulting dimer term must be at least k1.
+    Known Kd0 and Kb are required. The inferred pool must be below c_TF_all/2 and
+    the resulting dimer term must be at least Kd0.
     """
-    fraction = _fraction(baseline, maximum_output, amplitude)
-    kd, inducer, k1, k2, total_tf = (np.asarray(v, float) for v in (kd, inducer, k1, k2, total_tf))
-    if (not all(np.isfinite(v).all() for v in (kd, inducer, k1, k2, total_tf))
-            or any(np.any(v <= 0) for v in (kd, inducer, k2, total_tf)) or np.any(k1 < 0)):
-        raise ValueError('Require finite kd, I, k2, TF > 0 and k1 >= 0')
-    pool = fraction/(kd*(1-fraction))
-    if np.any(2*pool >= total_tf):
+    fraction = _fraction(T0, maximum_output, Tmax_minus_T0)
+    KA, c_I, Kd0, Kb, c_TF_all = (np.asarray(v, float) for v in (KA, c_I, Kd0, Kb, c_TF_all))
+    if (not all(np.isfinite(v).all() for v in (KA, c_I, Kd0, Kb, c_TF_all))
+            or any(np.any(v <= 0) for v in (KA, c_I, Kb, c_TF_all)) or np.any(Kd0 < 0)):
+        raise ValueError('Require finite KA, c_I, Kb, TF > 0 and Kd0 >= 0')
+    pool = fraction/(KA*(1-fraction))
+    if np.any(2*pool >= c_TF_all):
         raise ValueError('Output requires an unreachable dimer pool at this total TF')
-    monomer = (total_tf-2*pool)/(1+k2*inducer)
-    M = (pool/monomer**2-k1)/inducer**2
+    c_TF = (c_TF_all-2*pool)/(1+Kb*c_I)
+    Kb2_Kd1 = (pool/c_TF**2-Kd0)/c_I**2
     # Baseline subtraction can amplify rounding when the induced pool is tiny.
-    # An output indistinguishable (within eight ULPs) from the exact k3=0
-    # boundary represents M=0; materially lower outputs remain invalid.
-    zero_output = response(total_tf, kd, k1, k2, 0., amplitude, baseline, inducer)
+    # An output indistinguishable (within eight ULPs) from the exact Kd1=0
+    # boundary represents Kb2_Kd1=0; materially lower outputs remain invalid.
+    zero_output = response(c_TF_all, KA, Kd0, Kb, 0., Tmax_minus_T0, T0, c_I)
     boundary_tolerance = 8*np.spacing(np.maximum(np.abs(maximum_output), np.abs(zero_output)))
-    M = np.where(np.abs(np.asarray(maximum_output)-zero_output) <= boundary_tolerance, 0., M)
-    if not np.isfinite(M).all() or np.any(M < 0):
+    Kb2_Kd1 = np.where(np.abs(np.asarray(maximum_output)-zero_output) <= boundary_tolerance, 0., Kb2_Kd1)
+    if not np.isfinite(Kb2_Kd1).all() or np.any(Kb2_Kd1 < 0):
         raise ValueError('Output is incompatible with a nonnegative induced dimer term')
-    return M
+    return Kb2_Kd1
 
 
-def estimate_shared_parameters(table, *, fixed_lbd, amplitude=2.5, total_tf=1.0):
+def estimate_shared_parameters(table, *, fixed_lbd, Tmax_minus_T0=2.5, c_TF_all=1.0):
     """Summarize exact inversions as initialization, not an optimized fit.
 
-    table requires I0, P0, Pmax, I and either DBD/LBD or ID='DBD-LBD'.
-    fixed_lbd maps each LBD to known {'k1': value, 'k2': value}. Basal kd
-    inversions are averaged by DBD, then exact M inversions by LBD. Averages
+    table requires T0, T_OFF, T_ON, c_I and either DBD/LBD or ID='DBD-LBD'.
+    fixed_lbd maps each LBD to known {'Kd0': value, 'Kb': value}. Basal KA
+    inversions are averaged by DBD, then exact Kb2_Kd1 inversions by LBD. Averages
     need not reproduce noisy observations; use a fitting API for that.
     """
     import pandas as pd
@@ -76,34 +77,34 @@ def estimate_shared_parameters(table, *, fixed_lbd, amplitude=2.5, total_tf=1.0)
         data[['DBD', 'LBD']] = split
     if data.empty or data[['DBD', 'LBD']].isna().any().any():
         raise ValueError('Require nonempty observations with explicit dataset identities')
-    numeric = data[['I0', 'P0', 'Pmax', 'I']].to_numpy(float)
+    numeric = data[['T0', 'T_OFF', 'T_ON', 'c_I']].to_numpy(float)
     if not np.isfinite(numeric).all():
         raise ValueError('Require finite complete observations')
     rows = []
     for name in data['LBD'].unique():
-        if name not in fixed_lbd or set(fixed_lbd[name]) != {'k1', 'k2'}:
-            raise ValueError('Supply known k1 and k2 for every LBD')
+        if name not in fixed_lbd or set(fixed_lbd[name]) != {'Kd0', 'Kb'}:
+            raise ValueError('Supply known Kd0 and Kb for every LBD')
         rows.append({'LBD': name, **fixed_lbd[name]})
     lbd = pd.DataFrame(rows)
     data = data.merge(lbd, on='LBD', validate='many_to_one')
-    data['kd'] = estimate_kd(data['I0'], data['P0'], data['k1'], amplitude=amplitude, total_tf=total_tf)
-    dbd = data.groupby('DBD', as_index=False)['kd'].mean()
-    data = data.drop(columns='kd').merge(dbd, on='DBD', validate='many_to_one')
-    data['M'] = estimate_M(data['I0'], data['Pmax'], data['kd'], data['I'],
-                          k1=data['k1'], k2=data['k2'], amplitude=amplitude, total_tf=total_tf)
-    lbd = lbd.merge(data.groupby('LBD', as_index=False)['M'].mean(), on='LBD')
-    data = data.drop(columns='M').merge(lbd[['LBD', 'M']], on='LBD', validate='many_to_one')
+    data['KA'] = estimate_KA(data['T0'], data['T_OFF'], data['Kd0'], Tmax_minus_T0=Tmax_minus_T0, c_TF_all=c_TF_all)
+    dbd = data.groupby('DBD', as_index=False)['KA'].mean()
+    data = data.drop(columns='KA').merge(dbd, on='DBD', validate='many_to_one')
+    data['Kb2_Kd1'] = estimate_Kb2_Kd1(data['T0'], data['T_ON'], data['KA'], data['c_I'],
+                          Kd0=data['Kd0'], Kb=data['Kb'], Tmax_minus_T0=Tmax_minus_T0, c_TF_all=c_TF_all)
+    lbd = lbd.merge(data.groupby('LBD', as_index=False)['Kb2_Kd1'].mean(), on='LBD')
+    data = data.drop(columns='Kb2_Kd1').merge(lbd[['LBD', 'Kb2_Kd1']], on='LBD', validate='many_to_one')
     return {'DBD': dbd, 'LBD': lbd, 'observations': data}
 
 
-def _observations(L, I, observed, groups=None):
-    L, I, observed = (np.asarray(v, float) for v in (L, I, observed))
-    if (L.ndim != 1 or I.shape != L.shape or observed.shape != L.shape or len(L) < 2
-            or not all(np.isfinite(v).all() for v in (L, I, observed))
-            or np.any(L < 0) or np.any(I < 0) or np.any(observed <= 0)):
-        raise ValueError('Require finite paired vectors, nonnegative L/I and positive observations')
-    labels = np.zeros(len(L), dtype=int) if groups is None else np.asarray(groups, dtype=object)
-    if labels.shape != L.shape:
+def _observations(c_TF_all, c_I, observed, groups=None):
+    c_TF_all, c_I, observed = (np.asarray(v, float) for v in (c_TF_all, c_I, observed))
+    if (c_TF_all.ndim != 1 or c_I.shape != c_TF_all.shape or observed.shape != c_TF_all.shape or len(c_TF_all) < 2
+            or not all(np.isfinite(v).all() for v in (c_TF_all, c_I, observed))
+            or np.any(c_TF_all < 0) or np.any(c_I < 0) or np.any(observed <= 0)):
+        raise ValueError('Require finite paired vectors, nonnegative c_TF_all/c_I and positive observations')
+    labels = np.zeros(len(c_TF_all), dtype=int) if groups is None else np.asarray(groups, dtype=object)
+    if labels.shape != c_TF_all.shape:
         raise ValueError('groups must supply one dataset identity per observation')
     indices = {}
     for index, label in enumerate(labels):
@@ -113,7 +114,7 @@ def _observations(L, I, observed, groups=None):
         indices.setdefault(label, []).append(index)
     target = np.log10(observed)
     groups_info = {}
-    weights = np.empty(len(L))
+    weights = np.empty(len(c_TF_all))
     for label, index_list in indices.items():
         index = np.asarray(index_list)
         values = target[index]
@@ -122,7 +123,7 @@ def _observations(L, I, observed, groups=None):
             raise ValueError('Every dataset needs at least two nonconstant log10 observations')
         groups_info[label] = (index, sst)
         weights[index] = 1/np.sqrt(len(indices)*sst)
-    return L, I, observed, target, weights, groups_info
+    return c_TF_all, c_I, observed, target, weights, groups_info
 
 
 def _metrics(observed, prediction, groups_info):
@@ -154,11 +155,11 @@ def _metrics(observed, prediction, groups_info):
 
 def _parameters(fixed, initial, bounds=None, variant='standard'):
     if variant != 'standard':
-        raise ValueError("Only variant='standard' is supported; supply kx1/kx2 for the nuclear model")
-    required = {'kd', 'k1', 'k2', 'k3', 'Imax', 'I0'}
+        raise ValueError("Only variant='standard' is supported; supply Kx1/Kx2 for the nuclear model")
+    required = {'KA', 'Kd0', 'Kb', 'Kd1', 'Tmax_minus_T0', 'T0'}
     supplied = set(fixed) | set(initial)
     if (not initial or set(fixed) & set(initial) or not required.issubset(supplied)
-            or supplied-required-{'kx1', 'kx2'}):
+            or supplied-required-{'Kx1', 'Kx2'}):
         raise ValueError('Supply distinct fixed/fitted parameters of the canonical response')
     names = list(initial)
     x0 = np.asarray([initial[name] for name in names], float)
@@ -176,7 +177,7 @@ def _parameters(fixed, initial, bounds=None, variant='standard'):
     return names, x0, (lower, upper)
 
 
-def fit_response(L, I, observed, *, fixed, initial, scale='log10', bounds=None,
+def fit_response(c_TF_all, c_I, observed, *, fixed, initial, scale='log10', bounds=None,
                  groups=None, variant='standard', max_nfev=10000):
     """Fit selected parameters by minimizing mean_dataset(1 - R2_log10).
 
@@ -188,11 +189,11 @@ def fit_response(L, I, observed, *, fixed, initial, scale='log10', bounds=None,
     """
     if scale != 'log10':
         raise ValueError("Parameter fitting only supports scale='log10'")
-    L, I, observed, target, weights, groups_info = _observations(L, I, observed, groups)
+    c_TF_all, c_I, observed, target, weights, groups_info = _observations(c_TF_all, c_I, observed, groups)
     names, x0, bounds = _parameters(fixed, initial, bounds, variant)
 
     def evaluate(values):
-        predicted = response(L=L, I=I, **fixed, **dict(zip(names, values)))
+        predicted = response(c_TF_all=c_TF_all, c_I=c_I, **fixed, **dict(zip(names, values)))
         if not np.isfinite(predicted).all() or np.any(predicted <= 0):
             raise ValueError('Log10 fitting requires finite positive predictions')
         return predicted
@@ -216,51 +217,51 @@ def _datasets(datasets):
         raise ValueError('Provide datasets with distinct names')
     normalized = []
     for data in datasets:
-        L, I, y, _, _, _ = _observations(data['L'], data['I'], data['observed'])
-        normalized.append({'name': data['name'], 'L': L, 'I': I, 'observed': y})
+        c_TF_all, c_I, y, _, _, _ = _observations(data['c_TF_all'], data['c_I'], data['observed'])
+        normalized.append({'name': data['name'], 'c_TF_all': c_TF_all, 'c_I': c_I, 'observed': y})
     return normalized
 
 
-def fit_shared_then_kd(datasets, *, initial_shared, Imax, I0, initial_kd=10.0,
+def fit_shared_then_KA(datasets, *, initial_shared, Tmax_minus_T0, T0, initial_KA=10.0,
                        variant='standard', max_nfev=10000, warm_start=True):
-    """Fit shared receptor parameters with fixed kd, then each dataset's kd.
+    """Fit shared receptor parameters with fixed KA, then each dataset's KA.
 
     Both stages use the canonical response and log10 R-squared objective.
     The shared stage averages per-dataset normalized errors equally.
     """
     datasets = _datasets(datasets)
-    shared = fit_response(np.concatenate([d['L'] for d in datasets]),
-                          np.concatenate([d['I'] for d in datasets]),
+    shared = fit_response(np.concatenate([d['c_TF_all'] for d in datasets]),
+                          np.concatenate([d['c_I'] for d in datasets]),
                           np.concatenate([d['observed'] for d in datasets]),
-                          fixed={'kd': initial_kd, 'Imax': Imax, 'I0': I0},
+                          fixed={'KA': initial_KA, 'Tmax_minus_T0': Tmax_minus_T0, 'T0': T0},
                           initial=initial_shared, variant=variant, max_nfev=max_nfev,
-                          groups=[d['name'] for d in datasets for _ in d['L']])
+                          groups=[d['name'] for d in datasets for _ in d['c_TF_all']])
     per_dataset = {}
-    kd = initial_kd
+    KA = initial_KA
     for data in datasets:
-        fit = fit_response(data['L'], data['I'], data['observed'],
-                           fixed={**shared['parameters'], 'Imax': Imax, 'I0': I0},
-                           initial={'kd': kd}, variant=variant, max_nfev=max_nfev)
+        fit = fit_response(data['c_TF_all'], data['c_I'], data['observed'],
+                           fixed={**shared['parameters'], 'Tmax_minus_T0': Tmax_minus_T0, 'T0': T0},
+                           initial={'KA': KA}, variant=variant, max_nfev=max_nfev)
         per_dataset[data['name']] = fit
         if warm_start:
-            kd = fit['parameters']['kd']
+            KA = fit['parameters']['KA']
     return {'shared': shared, 'datasets': per_dataset,
             'finite': shared['finite'] and all(f['finite'] for f in per_dataset.values()),
             'success': shared['success'] and all(f['success'] for f in per_dataset.values())}
 
 
-def fit_notebook_curve_fit(L, I, observed, *, cell, fixed, initial=None,
+def fit_notebook_curve_fit(c_TF_all, c_I, observed, *, cell, fixed, initial=None,
                            bounds=None, groups=None, maxfev=None):
     """Use SciPy curve_fit with the canonical log10 R-squared objective.
 
-    Cell 0/2 select k1/k2/k3; cell 1 also fits kx1/kx2. Notebook starts and
+    Cell 0/2 select Kd0/Kb/Kd1; cell 1 also fits Kx1/Kx2. Notebook starts and
     valid finite lower bounds are retained; invalid penalties and unbounded
     fallbacks are removed. sigma implements equal per-dataset normalization.
     """
     defaults = {
-        0: (['k1', 'k2', 'k3'], [.1, .1, .1], ([1e-20, 1e-15, 1e-15], [1000, 1e12, 1e23])),
-        1: (['k1', 'k2', 'k3', 'kx1', 'kx2'], [.001, 1, 1000000, 10, 10], (0., np.inf)),
-        2: (['k1', 'k2', 'k3'], [1, 1, .1], ([1e-17, 1e-8, 1e-6], [1e12, 1e10, 1e11])),
+        0: (['Kd0', 'Kb', 'Kd1'], [.1, .1, .1], ([1e-20, 1e-15, 1e-15], [1000, 1e12, 1e23])),
+        1: (['Kd0', 'Kb', 'Kd1', 'Kx1', 'Kx2'], [.001, 1, 1000000, 10, 10], (0., np.inf)),
+        2: (['Kd0', 'Kb', 'Kd1'], [1, 1, .1], ([1e-17, 1e-8, 1e-6], [1e12, 1e10, 1e11])),
     }
     if cell not in defaults:
         raise ValueError('Choose fitting cell 0, 1 or 2')
@@ -270,26 +271,26 @@ def fit_notebook_curve_fit(L, I, observed, *, cell, fixed, initial=None,
         raise ValueError('Initial parameters must match the selected fitting cell')
     initial = {name: initial[name] for name in names}
     names, p0, bounds = _parameters(fixed, initial, source_bounds if bounds is None else bounds)
-    L, I, observed, target, weights, groups_info = _observations(L, I, observed, groups)
+    c_TF_all, c_I, observed, target, weights, groups_info = _observations(c_TF_all, c_I, observed, groups)
 
     def forward(x, *values):
-        prediction = response(L=x[0], I=x[1], **fixed, **dict(zip(names, values)))
+        prediction = response(c_TF_all=x[0], c_I=x[1], **fixed, **dict(zip(names, values)))
         if not np.isfinite(prediction).all() or np.any(prediction <= 0):
             raise ValueError('Log10 fitting requires finite positive predictions')
         return np.log10(prediction)
 
     parameters, covariance, info, message, status = curve_fit(
-        forward, (L, I), target, p0=p0, bounds=bounds, sigma=1/weights,
+        forward, (c_TF_all, c_I), target, p0=p0, bounds=bounds, sigma=1/weights,
         maxfev=10000 if maxfev is None else maxfev, x_scale='jac', full_output=True)
-    prediction = response(L=L, I=I, **fixed, **dict(zip(names, parameters)))
+    prediction = response(c_TF_all=c_TF_all, c_I=c_I, **fixed, **dict(zip(names, parameters)))
     metrics = _metrics(observed, prediction, groups_info)
     return {**metrics, 'parameters': dict(zip(names, parameters)), 'covariance': covariance,
             'success': bool(status in (1, 2, 3, 4) and metrics['finite']),
             'message': message, 'optimizer': 'scipy.optimize.curve_fit', 'optimizer_info': info}
 
 
-def fit_shared_then_kd_adam(datasets, *, initial_shared, Imax, I0, initial_kd=10.0,
-                            variant='standard', shared_steps=100000, kd_steps=150000,
+def fit_shared_then_KA_adam(datasets, *, initial_shared, Tmax_minus_T0, T0, initial_KA=10.0,
+                            variant='standard', shared_steps=100000, KA_steps=150000,
                             learning_rate=.001, max_gradient_norm=5.0, warm_start=True,
                             gradient_tolerance=1e-7):
     """Optional float64 Adam fitting of the same canonical log10 objective.
@@ -302,31 +303,31 @@ def fit_shared_then_kd_adam(datasets, *, initial_shared, Imax, I0, initial_kd=10
     """
     import torch
     datasets = _datasets(datasets)
-    names, initial, _ = _parameters({'kd': initial_kd, 'Imax': Imax, 'I0': I0},
+    names, initial, _ = _parameters({'KA': initial_KA, 'Tmax_minus_T0': Tmax_minus_T0, 'T0': T0},
                                     initial_shared, variant=variant)
-    if (np.any(initial <= 0) or not np.isfinite(initial_kd) or initial_kd <= 0
+    if (np.any(initial <= 0) or not np.isfinite(initial_KA) or initial_KA <= 0
             or any(not np.isfinite(v) or v <= 0 for v in (learning_rate, max_gradient_norm, gradient_tolerance))):
-        raise ValueError('Adam initial parameters, kd, learning rate and tolerances must be positive')
-    if not all(isinstance(v, (int, np.integer)) and v >= 0 for v in (shared_steps, kd_steps)):
+        raise ValueError('Adam initial parameters, KA, learning rate and tolerances must be positive')
+    if not all(isinstance(v, (int, np.integer)) and v >= 0 for v in (shared_steps, KA_steps)):
         raise ValueError('Iteration counts must be nonnegative integers')
     parameters = {name: torch.nn.Parameter(torch.tensor(np.log(float(value)), dtype=torch.float64))
-                  for name, value in {**initial_shared, 'kd': initial_kd}.items()}
+                  for name, value in {**initial_shared, 'KA': initial_KA}.items()}
 
     def values():
         return {name: torch.exp(value) for name, value in parameters.items()}
 
-    def forward(L, I):
+    def forward(c_TF_all, c_I):
         p = values()
-        kx1, kx2 = p.get('kx1', 0.), p.get('kx2', 0.)
-        b = 1+kx1+p['k2']*I*(1+kx2)
-        d = p['k1']*(1+kx1**2)+p['k2']**2*p['k3']*I**2*(1+kx2**2)
-        monomer = 2*L/(b+torch.sqrt(b*b+8*d*L))
-        z = p['kd']*d*monomer**2
-        return I0+Imax*z/(1+z)
+        Kx1, Kx2 = p.get('Kx1', 0.), p.get('Kx2', 0.)
+        b = 1+Kx1+p['Kb']*c_I*(1+Kx2)
+        d = p['Kd0']*(1+Kx1**2)+p['Kb']**2*p['Kd1']*c_I**2*(1+Kx2**2)
+        c_TF = 2*c_TF_all/(b+torch.sqrt(b*b+8*d*c_TF_all))
+        z = p['KA']*d*c_TF**2
+        return T0+Tmax_minus_T0*z/(1+z)
 
-    def train(L, I, observed, active, steps, groups=None):
-        L, I, observed, target, weights, groups_info = _observations(L, I, observed, groups)
-        L, I, target, weights = (torch.tensor(v, dtype=torch.float64) for v in (L, I, target, weights))
+    def train(c_TF_all, c_I, observed, active, steps, groups=None):
+        c_TF_all, c_I, observed, target, weights, groups_info = _observations(c_TF_all, c_I, observed, groups)
+        c_TF_all, c_I, target, weights = (torch.tensor(v, dtype=torch.float64) for v in (c_TF_all, c_I, target, weights))
         for name, parameter in parameters.items():
             parameter.requires_grad_(name in active)
             parameter.grad = None
@@ -337,7 +338,7 @@ def fit_shared_then_kd_adam(datasets, *, initial_shared, Imax, I0, initial_kd=10
         gradient_norm = np.inf
         for step in range(steps+1):
             optimizer.zero_grad(set_to_none=True)
-            predicted = forward(L, I)
+            predicted = forward(c_TF_all, c_I)
             loss = torch.sum(((torch.log10(predicted)-target)*weights)**2)
             if not bool(torch.isfinite(loss)) or not bool(torch.all(predicted > 0)):
                 raise FloatingPointError('Adam produced a nonfinite log10 objective or invalid response')
@@ -362,14 +363,14 @@ def fit_shared_then_kd_adam(datasets, *, initial_shared, Imax, I0, initial_kd=10
                 'gradient_norm': gradient_norm,
                 'message': 'Gradient tolerance reached' if converged else 'Step budget exhausted'}
 
-    shared = train(*(np.concatenate([d[key] for d in datasets]) for key in ('L', 'I', 'observed')),
-                   names, shared_steps, groups=[d['name'] for d in datasets for _ in d['L']])
+    shared = train(*(np.concatenate([d[key] for d in datasets]) for key in ('c_TF_all', 'c_I', 'observed')),
+                   names, shared_steps, groups=[d['name'] for d in datasets for _ in d['c_TF_all']])
     results = {}
     for data in datasets:
         if not warm_start:
             with torch.no_grad():
-                parameters['kd'].fill_(np.log(initial_kd))
-        results[data['name']] = train(data['L'], data['I'], data['observed'], ['kd'], kd_steps)
+                parameters['KA'].fill_(np.log(initial_KA))
+        results[data['name']] = train(data['c_TF_all'], data['c_I'], data['observed'], ['KA'], KA_steps)
     return {'shared': shared, 'datasets': results, 'variant': 'standard',
             'finite': shared['finite'] and all(r['finite'] for r in results.values()),
             'success': shared['success'] and all(r['success'] for r in results.values())}

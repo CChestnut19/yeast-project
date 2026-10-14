@@ -16,53 +16,53 @@ def _paired(x, y, *, minimum=2):
     return x, y
 
 
-def get_steep_interval(L, P, threshold_ratio=0.8):
+def get_steep_interval(c_TF_all, P, threshold_ratio=0.8):
     """box cell 0: first/last grid points above a fraction of maximum log slope.
 
     A flat/decreasing curve has no positive steep interval and returns NaNs.
     The interval encloses all qualifying points, even when disjoint.
     """
-    L, P = _paired(L, P)
-    if np.any(L <= 0) or np.any(P <= 0) or np.any(np.diff(L) <= 0):
+    c_TF_all, P = _paired(c_TF_all, P)
+    if np.any(c_TF_all <= 0) or np.any(P <= 0) or np.any(np.diff(c_TF_all) <= 0):
         raise ValueError("Require positive response and increasing positive TF grid")
     if not 0 <= threshold_ratio < 1:
         raise ValueError("threshold_ratio must lie in [0, 1)")
-    slope = np.gradient(np.log10(P), np.log10(L))
+    slope = np.gradient(np.log10(P), np.log10(c_TF_all))
     indices = np.flatnonzero((slope > threshold_ratio*np.max(slope)) & (slope > 0))
-    return (float(L[indices[0]]), float(L[indices[-1]])) if indices.size else (np.nan, np.nan)
+    return (float(c_TF_all[indices[0]]), float(c_TF_all[indices[-1]])) if indices.size else (np.nan, np.nan)
 
 
-def saturated_fold_approximation(L, k1, kd):
-    """ec50 cells 0–1's approximate fold, including its finite L=0 limit."""
-    L, k1, kd = np.asarray(L, float), np.asarray(k1, float), np.asarray(kd, float)
-    if np.any(L < 0) or np.any(k1 <= 0) or np.any(kd < 0):
-        raise ValueError("Require L>=0, k1>0, kd>=0")
-    root = np.sqrt(1+8*L*k1)
-    return kd*(root+1)**2/(16*k1*(1+L*kd/2))
+def saturated_fold_approximation(c_TF_all, Kd0, KA):
+    """ec50 cells 0–1's approximate fold, including its finite c_TF_all=0 limit."""
+    c_TF_all, Kd0, KA = np.asarray(c_TF_all, float), np.asarray(Kd0, float), np.asarray(KA, float)
+    if np.any(c_TF_all < 0) or np.any(Kd0 <= 0) or np.any(KA < 0):
+        raise ValueError("Require c_TF_all>=0, Kd0>0, KA>=0")
+    root = np.sqrt(1+8*c_TF_all*Kd0)
+    return KA*(root+1)**2/(16*Kd0*(1+c_TF_all*KA/2))
 
 
-def quality_ratio(k1, k2, k3, I, *, kx1=None, kx2=None):
+def quality_ratio(Kd0, Kb, Kd1, c_I, *, Kx1=None, Kx2=None):
     """Inducer-dependent / basal dimerization contribution in the CIC pool.
 
     This is a coefficient diagnostic, not output fold change or an EC50.
     """
-    if (kx1 is None) != (kx2 is None):
+    if (Kx1 is None) != (Kx2 is None):
         raise ValueError("Supply both nuclear parameters or neither")
-    k1, k2, k3, I, x1, x2 = (np.asarray(v, float) for v in
-                             (k1,k2,k3,I,0. if kx1 is None else kx1,0. if kx2 is None else kx2))
-    if (np.any(k1 <= 0) or any(not np.isfinite(v).all() or np.any(v < 0)
-                             for v in (k1,k2,k3,I,x1,x2))):
-        raise ValueError('Require finite non-negative CIC parameters and k1 > 0')
-    return k3*k2**2*I**2*(1+x2**2)/(k1*(1+x1**2))
+    Kd0, Kb, Kd1, c_I, x1, x2 = (np.asarray(v, float) for v in
+                             (Kd0,Kb,Kd1,c_I,0. if Kx1 is None else Kx1,0. if Kx2 is None else Kx2))
+    if (np.any(Kd0 <= 0) or any(not np.isfinite(v).all() or np.any(v < 0)
+                             for v in (Kd0,Kb,Kd1,c_I,x1,x2))):
+        raise ValueError('Require finite non-negative CIC parameters and Kd0 > 0')
+    return Kd1*Kb**2*c_I**2*(1+x2**2)/(Kd0*(1+x1**2))
 
 
-def log_fold_range(L, k1, k2, k3, kd, I, *, kx1=0, kx2=0, Imax=1., I0=0.):
+def log_fold_range(c_TF_all, Kd0, Kb, Kd1, KA, c_I, *, Kx1=0, Kx2=0, Tmax_minus_T0=1., T0=0.):
     """Min/max log10(on/off) using exactly analysis.response_pair's equation.
 
     Undefined folds raise an error; no sentinel values or observations are
-    inserted. A positive I0 defines the zero-TF fold as one.
+    inserted. A positive T0 defines the zero-TF fold as one.
     """
-    on, off = response_pair(L, kd, k1, k2, k3, Imax, I0, I, kx1, kx2)
+    on, off = response_pair(c_TF_all, KA, Kd0, Kb, Kd1, Tmax_minus_T0, T0, c_I, Kx1, Kx2)
     if (not np.size(on) or np.any(on <= 0) or np.any(off <= 0)
             or not np.isfinite(on).all() or not np.isfinite(off).all()):
         raise ValueError('Fold range requires positive finite induced and basal responses')
