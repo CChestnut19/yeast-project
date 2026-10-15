@@ -56,6 +56,7 @@ previous_audit/
 
 - The main model combines the S32-S47 mass-balance equations with S11. `Tmax=35.85` is the total output ceiling, and `T0_variant` comes from the supplementary table.
 - The `KA=0.74` override for LexAec87 comes from the original archive. Its `T0_variant` remains the table value.
+- Numeric source text may have one leading Excel literal apostrophe (`'`, `‘` or `’`). The reader removes that prefix only while parsing, preserving the numeric sign and trailing-star flag. The workbook and saved source snapshot retain the original text, including cells `AJ48`, `AG49` and `AG50`. Malformed and nonfinite values are still rejected.
 - Measurements with a trailing `*` are excluded first. Values marked only by green fill remain in the main analysis; a separate sensitivity analysis excludes them.
 - Each R² observation is the arithmetic mean of unstarred replicates sharing the same panel, batch/Run/Day, actual TF input and inducer concentration `c_I`. Different batches are not pooled when calculating R².
 - Plot summaries separately group batches with similar actual TF inputs. Each nonzero member must be within 30% of the group mean. This grouping does not change the observation unit used for R².

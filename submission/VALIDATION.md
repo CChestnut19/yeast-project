@@ -1,8 +1,22 @@
 # Algorithm-only validation
 
+## Activator source parsing 2026-10-15
+
+The current suite contains 22 tests: 21 passed with one optional Torch skip
+in Python 3.12.14; all 22 passed in Python 3.9.15/Torch 1.13. Four new tests
+cover literal apostrophes, preserved signed values/star flags, malformed
+and nonfinite input rejection, and extraction from the original workbook.
+
+The HKCI84-RpaR179 panel now extracts all 360 records, including `AJ48`,
+`AG49` and `AG50`. Their negative measured responses and starred exclusions
+are preserved. The workbook SHA-256 remains
+`28c095d7796858118591d5a5c1670d2bb56659a75a587687a8170219e55237bf`.
+The Note 10/11 demo passed. This checks lexical parsing and HKCI extraction;
+it does not establish successful reproduction of the full 27-panel workflow.
+
 ## SI naming migration 2026-10-14
 
-The current suite contains 18 SI naming and numerical checks: 17 passed and
+The naming migration suite contained 18 checks: 17 passed and
 one optional Torch check was skipped in the Python 3.12.14 environment;
 all 18 passed in the existing Python 3.9.15/Torch 1.13 environment.
 The new tests exercise SI keyword dictionaries, exact inversions, total

@@ -31,6 +31,7 @@
     "submission/package_files.json",
     "submission/requirements-lock.txt",
     "tests/test_si_names.py",
+    "tests/test_activator_source_parsing.py",
     "tools/build_submission.py",
     "tools/run_submission_demo.py",
     "yeast/README.md",

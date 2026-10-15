@@ -79,12 +79,19 @@ def cell_coordinates(reference):
 
 
 def parse_cell(value):
+    """Parse a finite number and trailing star, retaining signed measurements.
+
+    A single Excel-style literal apostrophe (straight or curly) is accepted
+    as a text prefix. Source values themselves are never rewritten.
+    """
     if value is None or value == "" or isinstance(value, bool):
         return None, False
     text = str(value).strip()
     starred = text.endswith("*")
     if starred:
         text = text[:-1].strip()
+    if text.startswith(("'", "\u2018", "\u2019")):
+        text = text[1:].strip()
     if text.lower().startswith("rpu="):
         text = text[4:]
     try:
