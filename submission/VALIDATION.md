@@ -1,5 +1,62 @@
 # Algorithm-only validation
 
+## Source workbook update 2026-10-16
+
+`data/Source data.xlsx` is now the unchanged author-supplied
+`Source data(5).xlsx` (699,800 bytes), SHA-256
+`fcbeb334cd553d674ce425dfc69f6dd3778864385117a1f9bee71ea561335e7c`.
+The manifest and package metadata identify this version. The older hashes
+in the dated records below describe their respective historical workbooks.
+No model, fitted parameter, archived numerical CSV or source formula was edited.
+
+- ZIP CRC and all 21 worksheet inventories passed; no uncached formulas were
+  found. Comparing cached values and formulas, only `Figure 5` differs from
+  the preceding workbook.
+- All 1,141 Fig. 5E sensor/observation/prediction pairs exactly match the
+  archived Note 10 observations and current predictions as a multiset;
+  worksheet row order is not used as an input-condition key. There are
+  no negative Fig. 5E predictions. This resolves the earlier prediction-column
+  mismatch for the supplied version.
+- All 216 Note 11 means, sample SDs and dose conditions match the two-replicate
+  source reconstruction. The comparison strips the three trailing-star
+  annotations in `K29`, `M32` and `V7`; it does not establish their exclusion policy.
+- The 22-test suite passed in Python 3.9.15/Torch 1.13. In the Python 3.12.14
+  environment, 21 passed and the optional Torch test was skipped. The
+  Note 10/11 demo passed. Independent Decimal checks also reproduced the
+  core mass balance and both sets of predictions.
+- A synthetic mammalian workflow with 25 CSVs, 13 LBD groups, 11 DBD groups
+  and 60 parameters completed with 142 validation checks. This is an
+  executable-input check, not an experimental fit or SI-objective validation.
+- The mammalian NumPy/Torch parity and gradient checks passed, including
+  a real Adam update; both backend result sets passed 37 checks each on
+  a separate synthetic fixture. Syntax parsing passed for all 129 tracked
+  Python files.
+- CIC-Designer/WebDataBase checks covered syntax in 91 Python files and
+  selected original functions with transport/database mocks. They were not
+  live Flask/Django/database or complete assembly tests.
+
+### Remaining issues reproduced in this review
+
+- The activator parameter reader loads 16 of the current SI Table 3's 19
+  named LBDs because its row loop stops early; the required `BjaR180S107R`
+  is omitted. Even with an audit-only complete parameter dictionary, 4 of
+  27 panels remain blocked by negative actual TF inputs (`Q177`, `Q187`,
+  `O198`, `Q258`). The other 23 panels can be computed independently.
+  Literal apostrophes in the three starred HKCI measurements parse correctly.
+- Mammalian residual scaling and feasible-candidate ranking still differ
+  from SI S103/S106. Corrupted derived parameter columns and absent metric
+  tables can also escape its numerical validator. Real numerical input
+  CSVs, mappings and matched initial vectors are still missing.
+- CIC fitting/saving retains a case-mismatched LBD route, missing CSRF
+  handling, inducer-reference unit inconsistency and a stale DBD slider
+  state. The server also retains machine-specific imports and incomplete
+  request-domain checks. A workbook replacement cannot resolve these issues.
+- The workbook still contains 58 cached Excel error cells (51 in
+  `Supplementary Figure 8`, 3 in `Supplementary Figure 14`, 4 in
+  `SI-note repressor`). They are inventoried and preserved, not silently
+  repaired or recalculated. Shared-control identity and annotation policies
+  remain author decisions.
+
 ## Activator source parsing 2026-10-15
 
 The current suite contains 22 tests: 21 passed with one optional Torch skip

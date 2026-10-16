@@ -2,7 +2,7 @@
 
 ## Included
 
-- [`data/Source data.xlsx`](../data/Source%20data.xlsx): the author-supplied `Source data(4).xlsx`, archived unchanged. Its SHA-256 and 21-worksheet inventory are recorded in [source_data_manifest.json](../data/source_data_manifest.json).
+- [`data/Source data.xlsx`](../data/Source%20data.xlsx): the author-supplied `Source data(5).xlsx`, archived unchanged. Its SHA-256 and 21-worksheet inventory are recorded in [source_data_manifest.json](../data/source_data_manifest.json).
 
 - `yeast/repressor/data/experiment_data.csv`: 1,141 original supplied replicates for four sensors.
 - `yeast/combinatorial/data/Supplementary_Note_11_plot_data.csv`: 216 original supplied means and sample SDs across 12 panels. The historical filename is retained for provenance.
